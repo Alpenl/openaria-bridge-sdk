@@ -1,0 +1,27 @@
+{
+  "schema": "ylx.take-aggregation-corpus.v1",
+  "fixture_scope": "synthetic-non-production",
+  "cases": [
+    {
+      "id": "missing-predecessor-open-view",
+      "mode": "partial-view",
+      "session_fixtures": [
+        "invalid/ylx-device-session-v1.successor-without-predecessor.json"
+      ],
+      "expected_status": "partial"
+    },
+    {
+      "id": "missing-predecessor-closed-corpus",
+      "mode": "closed-corpus",
+      "session_fixtures": [
+        "invalid/ylx-device-session-v1.successor-without-predecessor.json"
+      ],
+      "expected_status": "invalid",
+      "expected_error_keywords": [
+        "predecessor",
+        "absent",
+        "closed corpus"
+      ]
+    }
+  ]
+}

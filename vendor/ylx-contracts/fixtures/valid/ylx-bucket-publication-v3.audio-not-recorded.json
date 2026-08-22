@@ -1,0 +1,101 @@
+{
+  "schema": "ylx.bucket-publication.v3",
+  "publication_id": "01989f72-0000-7d4e-bf50-61728394a5b6",
+  "sealed": true,
+  "published_at": "2026-08-08T11:11:00+08:00",
+  "device": {
+    "device_id": "550e8400-e29b-41d4-a716-446655440000",
+    "device_label": "YLX-30D5872D"
+  },
+  "source_manifest": {
+    "manifest_id": "01989f6c-2c01-7b2c-9d3e-4f5061728394",
+    "schema": "ylx.device-session.v2",
+    "session_id": "01989f6c-2c00-7a1b-8c2d-3e4f50617283",
+    "volume_id": "6ba7b812-9dad-41d1-80b4-00c04fd430c8",
+    "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-d4b7a5b400d3678e74b3e97b25cdd50dfff4a7fee72a17e5bec38e2aa53f4232",
+    "bytes": 3955,
+    "sha256": "d4b7a5b400d3678e74b3e97b25cdd50dfff4a7fee72a17e5bec38e2aa53f4232"
+  },
+  "source_audio": {
+    "state": "not_recorded",
+    "reason": "user_disabled"
+  },
+  "take": {
+    "take_id": "01989f6c-f000-7c3d-ae4f-5061728394a5",
+    "sequence": 1,
+    "continuation_of": null
+  },
+  "publication_object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/__ylx_evidence__/publication.json",
+  "artifacts": [
+    {
+      "artifact_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "role": "video.left",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "video/mp4",
+      "bytes": 30123456,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      }
+    },
+    {
+      "artifact_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "role": "video.right",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "media_type": "video/mp4",
+      "bytes": 30234567,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      }
+    },
+    {
+      "artifact_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "role": "imu.samples",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "media_type": "application/x-ndjson",
+      "bytes": 166400,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      }
+    },
+    {
+      "artifact_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "role": "frames.index",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "media_type": "application/x-ndjson",
+      "bytes": 120240,
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        ]
+      }
+    },
+    {
+      "artifact_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "role": "log.capture",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6c-2c00-7a1b-8c2d-3e4f50617283/f-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "media_type": "text/plain",
+      "bytes": 12034,
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      }
+    }
+  ]
+}

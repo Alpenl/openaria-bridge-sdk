@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ylx:candidate:publication-signature:v1",
+  "title": "DRAFT mirror of RP-YLX publicationSignature wire envelope",
+  "description": "DRAFT wire-only mirror. RP permits additional envelope properties for known schema_version 1; no key material, authority, registry, or device binding is carried by media.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["algorithm", "key_version", "public_key_fingerprint", "signature"],
+  "properties": {
+    "algorithm": {"type": "string", "const": "ed25519"},
+    "key_version": {"type": "integer", "minimum": 1},
+    "public_key_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+  }
+}

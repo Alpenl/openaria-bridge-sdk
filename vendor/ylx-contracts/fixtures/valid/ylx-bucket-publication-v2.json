@@ -1,0 +1,97 @@
+{
+  "schema": "ylx.bucket-publication.v2",
+  "publication_id": "01989f70-0000-7d4e-bf50-61728394a5b6",
+  "sealed": true,
+  "published_at": "2026-08-08T11:00:00+08:00",
+  "device": {
+    "device_id": "550e8400-e29b-41d4-a716-446655440000",
+    "device_label": "YLX-30D5872D"
+  },
+  "source_manifest": {
+    "manifest_id": "01989f6a-2c01-7b2c-9d3e-4f5061728394",
+    "schema": "ylx.device-session.v1",
+    "session_id": "01989f6a-2c00-7a1b-8c2d-3e4f50617283",
+    "volume_id": "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+    "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-7e53429e512f12d8b6aa2b1794b73c1790792e738df44d20e5487a69d6412815",
+    "bytes": 3711,
+    "sha256": "7e53429e512f12d8b6aa2b1794b73c1790792e738df44d20e5487a69d6412815"
+  },
+  "take": {
+    "take_id": "01989f69-f000-7c3d-ae4f-5061728394a5",
+    "sequence": 1,
+    "continuation_of": null
+  },
+  "publication_object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/__ylx_evidence__/publication.json",
+  "artifacts": [
+    {
+      "artifact_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "role": "video.left",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-1111111111111111111111111111111111111111111111111111111111111111",
+      "media_type": "video/mp4",
+      "bytes": 30123456,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ]
+      }
+    },
+    {
+      "artifact_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "role": "video.right",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-2222222222222222222222222222222222222222222222222222222222222222",
+      "media_type": "video/mp4",
+      "bytes": 30234567,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ]
+      }
+    },
+    {
+      "artifact_id": "3333333333333333333333333333333333333333333333333333333333333333",
+      "role": "imu.samples",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-3333333333333333333333333333333333333333333333333333333333333333",
+      "media_type": "application/x-ndjson",
+      "bytes": 166400,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "3333333333333333333333333333333333333333333333333333333333333333"
+        ]
+      }
+    },
+    {
+      "artifact_id": "4444444444444444444444444444444444444444444444444444444444444444",
+      "role": "frames.index",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-4444444444444444444444444444444444444444444444444444444444444444",
+      "media_type": "application/x-ndjson",
+      "bytes": 120240,
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ]
+      }
+    },
+    {
+      "artifact_id": "5555555555555555555555555555555555555555555555555555555555555555",
+      "role": "log.capture",
+      "object_key": "synthetic/qualification/ylx-transfer/550e8400-e29b-41d4-a716-446655440000/01989f6a-2c00-7a1b-8c2d-3e4f50617283/f-5555555555555555555555555555555555555555555555555555555555555555",
+      "media_type": "text/plain",
+      "bytes": 12034,
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "5555555555555555555555555555555555555555555555555555555555555555"
+        ]
+      }
+    }
+  ]
+}

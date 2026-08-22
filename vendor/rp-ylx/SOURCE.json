@@ -1,0 +1,10 @@
+{
+  "source_repository": "RP-YLX",
+  "source_commit": "2db57ae68e04197397b8ac84f4d71548aa2fcb36",
+  "publication_manifest_schema_sha256": "34fdff84002e084ebc1d6cbd7ac51189ea93ceff9a5fab3b24dd4ed07f80129e",
+  "publication_signature_schema_sha256": "48fb65c73ba47406120aa75b878ddf7dd7a112b14fc5b4b0871a0f60e5946444",
+  "golden_vector_sha256": "d14efca3085594e1a1991b1c3662b565171e94751abefeba5d3c88cf7825c431",
+  "admission_manifest_sha256": "bc8de60db9766cf8e5e18d8f63bdabdb3288b896f5cb4e7501551d317e131347",
+  "admission_vector_sha256": "7b14d91cce9dfc91b96b30095a1760e6e7d79ed84844a9f75d70280655233c9b",
+  "trusted_key_registry_schema_sha256": "16b097254d992dd937cee77e3f8a511900f30cc501d93f09291d069d7861ee64"
+}

@@ -1,0 +1,616 @@
+{
+  "schema": "ylx.fixture-expected-errors.v1",
+  "description": "Each fixture must fail the named schema and expose all listed keywords in a validator's instance path, schema path, or message.",
+  "cases": {
+    "ylx-volume-v1.bad-device-label.json": {
+      "schema_basename": "ylx-volume-v1",
+      "expected_error_keywords": [
+        "device_label",
+        "pattern"
+      ]
+    },
+    "ylx-device-session-v1.unsealed.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "expected_error_keywords": [
+        "sealed",
+        "const"
+      ]
+    },
+    "ylx-device-session-v1.sealed-before-verification.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "sealed_at",
+        "ended_at",
+        "verified_at"
+      ]
+    },
+    "ylx-device-session-v1.adjacent-drop-events.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "drop events",
+        "adjacent"
+      ]
+    },
+    "ylx-device-session-v1.frame-count-mismatch.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "frames.count",
+        "dropped_frames"
+      ]
+    },
+    "ylx-device-session-v1.effective-fps-mismatch.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "effective_fps",
+        "frames.count",
+        "duration_seconds"
+      ]
+    },
+    "ylx-device-session-v1.role-media-type-mismatch.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "expected_error_keywords": [
+        "media_type",
+        "video/mp4"
+      ]
+    },
+    "ylx-device-session-v1.unsafe-path-segments.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "expected_error_keywords": [
+        "path",
+        "not",
+        "manifest",
+        "tmp"
+      ]
+    },
+    "ylx-device-session-v1.successor-without-predecessor.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "closed-corpus",
+      "expected_error_keywords": [
+        "take predecessor",
+        "absent",
+        "closed corpus"
+      ]
+    },
+    "ylx-device-session-v1.duplicate-artifact-path.json": {
+      "schema_basename": "ylx-device-session-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "duplicate artifact paths"
+      ]
+    },
+    "ylx-device-session-v2.missing-audio.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "expected_error_keywords": ["audio", "required"]
+    },
+    "ylx-device-session-v2.raw-imu-opencv-frame.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "expected_error_keywords": ["coordinate_frame", "raw_device_axes"]
+    },
+    "ylx-device-session-v2.audio-recorded-missing-artifact.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "expected_error_keywords": ["artifact", "required"]
+    },
+    "ylx-device-session-v2.audio-not-recorded-extra-artifact.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "expected_error_keywords": ["segments", "oneOf"]
+    },
+    "ylx-device-session-v2.audio-segment-gap.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["audio segment", "contiguous"]
+    },
+    "ylx-device-session-v2.audio-sample-rate-time-mismatch.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["audio segment", "sample_rate", "duration"]
+    },
+    "ylx-device-session-v2.audio-segment-sample-time-mismatch.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["audio segment", "sample_rate", "duration"]
+    },
+    "ylx-device-session-v2.audio-sample-count-mismatch.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["audio.sample_count", "sample sum"]
+    },
+    "ylx-device-session-v2.audio-channel-payload-mismatch.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["pcm_payload_bytes", "channels"]
+    },
+    "ylx-device-session-v2.audio-file-bytes-mismatch.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["artifact bytes", "pcm_payload_bytes", "wav_header_bytes"]
+    },
+    "ylx-device-session-v2.audio-zero-recorded-domain.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "expected_error_keywords": ["sample_count", "minimum"]
+    },
+    "ylx-device-session-v2.audio-header-file-inconsistency.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["artifact bytes", "pcm_payload_bytes", "wav_header_bytes"]
+    },
+    "ylx-device-session-v2.audio-sync-out-of-bounds.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["audio sync", "duration"]
+    },
+    "ylx-device-session-v2.duplicate-audio-path.json": {
+      "schema_basename": "ylx-device-session-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": ["duplicate artifact paths"]
+    },
+    "ylx-recording-state-v1.media-lost-without-diagnostic.json": {
+      "schema_basename": "ylx-recording-state-v1",
+      "expected_error_keywords": [
+        "diagnostics",
+        "contains"
+      ]
+    },
+    "ylx-recording-state-v1.safe-swap-status.json": {
+      "schema_basename": "ylx-recording-state-v1",
+      "expected_error_keywords": [
+        "storage",
+        "status",
+        "enum",
+        "safe_swap"
+      ]
+    },
+    "ylx-recording-state-v1.failed-recoverable-only.json": {
+      "schema_basename": "ylx-recording-state-v1",
+      "expected_error_keywords": [
+        "diagnostics",
+        "contains",
+        "recoverable"
+      ]
+    },
+    "ylx-recording-state-v1.abandoned-missing-authorization.json": {
+      "schema_basename": "ylx-recording-state-v1",
+      "expected_error_keywords": [
+        "abandonment",
+        "required"
+      ]
+    },
+    "ylx-bucket-publication-v2.bad-object-key.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "expected_error_keywords": [
+        "object_key",
+        "pattern"
+      ]
+    },
+    "ylx-bucket-publication-v2.missing-right-eye.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "expected_error_keywords": [
+        "artifacts",
+        "contains"
+      ]
+    },
+    "ylx-bucket-publication-v2.duplicate-left-eye.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "expected_error_keywords": [
+        "artifacts",
+        "maxContains"
+      ]
+    },
+    "ylx-bucket-publication-v2.mismatched-content-identity.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "artifact_id",
+        "sha256",
+        "object_key",
+        "direct artifact descriptor",
+        "direct provenance",
+        "complete source inventory"
+      ]
+    },
+    "ylx-bucket-publication-v2.incomplete-source-inventory.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "complete source inventory",
+        "missing"
+      ]
+    },
+    "ylx-bucket-publication-v2.authority-prefix-mismatch.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "publication",
+        "raw_prefix",
+        "authority"
+      ]
+    },
+    "ylx-bucket-publication-v2.inconsistent-shared-content.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "shared artifact_id",
+        "inconsistent",
+        "byte descriptor"
+      ]
+    },
+    "ylx-bucket-publication-v2.empty-transform-log.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "expected_error_keywords": [
+        "parameters",
+        "command",
+        "tool",
+        "environment",
+        "exit_status",
+        "required"
+      ]
+    },
+    "ylx-bucket-publication-v2.transform-log-video-alias.json": {
+      "schema_basename": "ylx-bucket-publication-v2",
+      "expected_error_keywords": [
+        "media_type",
+        "application/json",
+        "transform",
+        "ylx-transform-log"
+      ]
+    },
+    "ylx-bucket-publication-v3.wrong-source-major.json": {
+      "schema_basename": "ylx-bucket-publication-v3",
+      "expected_error_keywords": ["source_manifest", "schema", "ylx.device-session.v2"]
+    },
+    "ylx-bucket-publication-v3.audio-recorded-missing-audio-artifact.json": {
+      "schema_basename": "ylx-bucket-publication-v3",
+      "expected_error_keywords": ["artifacts", "contains"]
+    },
+    "ylx-bucket-publication-v3.no-audio-extra-audio-artifact.json": {
+      "schema_basename": "ylx-bucket-publication-v3",
+      "expected_error_keywords": ["audio.wav", "not"]
+    },
+    "ylx-bucket-publication-v3.audio-role-duplicate.json": {
+      "schema_basename": "ylx-bucket-publication-v3",
+      "expected_error_keywords": ["artifacts", "maxContains"]
+    },
+    "ylx-bucket-publication-v3.unknown-major.json": {
+      "schema_basename": "ylx-bucket-publication-v3",
+      "expected_error_keywords": ["schema", "ylx.bucket-publication.v3"]
+    },
+    "ylx-imu-sample-v1.scaled-units.json": {
+      "schema_basename": "ylx-imu-sample-v1",
+      "expected_error_keywords": [
+        "units",
+        "const"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-03-no-real-rollover-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "distinct event IDs",
+        "monotonic",
+        "real rollover_count"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-03-local-source-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "tick_clock.source",
+        "sample_phase.source",
+        "tick_rollover.source"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-03-self-reported-summary-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "self-reported",
+        "computed",
+        "read uncertainty"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-03-typed-artifacts-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "tick evidence requires raw_capture",
+        "external sync oracle requires video/photo/analysis",
+        "operator_log cannot satisfy"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-all-x-six-face-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "signed dominant axis",
+        "rank",
+        "condition"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-coverage-exception-nested-ref-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "coverage_exception",
+        "nested evidence_refs"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-known-rate-coverage-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "known_rate",
+        "x/y/z positive and negative",
+        "condition_number"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-opencv-optical-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "opencv_optical",
+        "new discriminator"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-range-authority-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "operator_record",
+        "full-scale"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-six-face-threshold-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "six_face",
+        "sample_count",
+        "scale_drift"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-typed-artifacts-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "section-specific raw_capture",
+        "photo/video/analysis",
+        "operator_log cannot satisfy"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-untraceable-vendor-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "traceable vendor primary"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.missing-real-identity-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "real device/build/session identity",
+        "raw_artifacts"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.hardware-profile-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "YLX hardware profile",
+        "1bcf:0b15"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.conflicting-artifact-identity.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "duplicate raw_artifacts.path",
+        "conflicting artifact identity"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.duplicate-artifact-path.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "duplicate raw_artifacts.path"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.duplicate-vendor-locator.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "vendor locator"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.synthetic-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "synthetic",
+        "PASS"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.no-sync-oracle-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "CAP-PHY-03",
+        "video_imu_sync_oracle"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.no-vendor-or-physical-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "CAP-PHY-04",
+        "vendor"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.packet-layout-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "packet_facts",
+        "fields",
+        "const"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.nested-stability-status-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "stability_01",
+        "status",
+        "enum"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-raw-artifact-path.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "raw_artifacts",
+        "path",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-local-ref.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "local_ref",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.stability-from-154-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "STABILITY-01",
+        "result",
+        "enum"
+      ]
+    },
+    "ylx-frame-record-v1.missing-right-eye.json": {
+      "schema_basename": "ylx-frame-record-v1",
+      "expected_error_keywords": [
+        "video_associations",
+        "oneOf"
+      ]
+    },
+    "ylx-external-authority-boundaries-v1.resolved-without-authority.json": {
+      "schema_basename": "ylx-external-authority-boundaries-v1",
+      "expected_error_keywords": [
+        "legacy_v1",
+        "status",
+        "const",
+        "BLOCKED"
+      ]
+    },
+    "ylx-external-authority-boundaries-v1.tls-pin-invented.json": {
+      "schema_basename": "ylx-external-authority-boundaries-v1",
+      "expected_error_keywords": [
+        "tls_pin",
+        "configuration",
+        "target",
+        "type",
+        "null"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-percent-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-userinfo-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-dot-segment-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-semicolon-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-raw-artifact-unicode-path.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "raw_artifacts",
+        "path",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-axis-mapping-operator-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "axis_mapping",
+        "operator_record"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-axis-mapping-vendor-unproved-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "traceable vendor primary",
+        "axis_mapping"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-axis-mapping-typed-artifacts-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "axis_mapping",
+        "raw_capture",
+        "photo/video/analysis"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.cap-phy-04-axis-mapping-vendor-ref-unbound-proof-false-pass.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "validation_stage": "cross-field",
+      "expected_error_keywords": [
+        "traceable vendor primary",
+        "axis_mapping"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-uppercase-vendor-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    },
+    "ylx-imu-physical-acceptance-v1.unsafe-vendor-uri-uppercase-https-range-proof.json": {
+      "schema_basename": "ylx-imu-physical-acceptance-v1",
+      "expected_error_keywords": [
+        "vendor_docs",
+        "uri",
+        "pattern"
+      ]
+    }
+  }
+}
