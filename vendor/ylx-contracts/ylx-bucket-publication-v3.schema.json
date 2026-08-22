@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ylx:schema:bucket-publication:v3",
+  "title": "YLX Bucket Publication v3",
+  "description": "Bucket Publication v3 strictly binds ylx.device-session.v2 source manifests. v2 publications remain bound to ylx.device-session.v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "publication_id",
+    "sealed",
+    "published_at",
+    "device",
+    "source_manifest",
+    "source_audio",
+    "take",
+    "publication_object_key",
+    "artifacts"
+  ],
+  "properties": {
+    "schema": {"const": "ylx.bucket-publication.v3"},
+    "publication_id": {"$ref": "#/$defs/uuidV7"},
+    "sealed": {"const": true},
+    "published_at": {"type": "string", "format": "date-time"},
+    "device": {"$ref": "#/$defs/deviceIdentity"},
+    "source_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_id",
+        "schema",
+        "session_id",
+        "volume_id",
+        "object_key",
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "manifest_id": {"$ref": "#/$defs/uuidV7"},
+        "schema": {"const": "ylx.device-session.v2"},
+        "session_id": {"$ref": "#/$defs/uuidV7"},
+        "volume_id": {"$ref": "#/$defs/uuidV4"},
+        "object_key": {"$ref": "#/$defs/contentObjectKey"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source_audio": {
+      "oneOf": [
+        {"$ref": "#/$defs/sourceAudioRecorded"},
+        {"$ref": "#/$defs/sourceAudioNotRecorded"}
+      ]
+    },
+    "take": {"$ref": "#/$defs/take"},
+    "publication_object_key": {"$ref": "#/$defs/publicationObjectKey"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"$ref": "#/$defs/publishedArtifact"},
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["role"],
+            "properties": {"role": {"const": "video.left"}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["role"],
+            "properties": {"role": {"const": "video.right"}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "if": {
+            "contains": {
+              "type": "object",
+              "required": ["provenance"],
+              "properties": {
+                "provenance": {
+                  "type": "object",
+                  "required": ["kind"],
+                  "properties": {"kind": {"const": "normalized-output"}}
+                }
+              }
+            },
+            "minContains": 1
+          },
+          "then": {
+            "contains": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {"role": {"const": "publication.transform-log"}}
+            },
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source_audio": {
+            "type": "object",
+            "required": ["state"],
+            "properties": {"state": {"const": "recorded"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {"role": {"const": "audio.wav"}}
+            },
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source_audio": {
+            "type": "object",
+            "required": ["state"],
+            "properties": {"state": {"const": "not_recorded"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {"role": {"const": "audio.wav"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uuidV7": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "uuidV4": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentObjectKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f-\\u009f])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?:(?!__ylx_evidence__(?:/|$))[^/]+/)*[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/f-[0-9a-f]{64}$"
+    },
+    "publicationObjectKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f-\\u009f])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?:(?!__ylx_evidence__(?:/|$))[^/]+/)*[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/__ylx_evidence__/publication\\.json$"
+    },
+    "deviceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "device_label"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/uuidV4"},
+        "device_label": {"type": "string", "pattern": "^YLX-[0-9A-F]{8}$"}
+      }
+    },
+    "take": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["take_id", "sequence", "continuation_of"],
+      "oneOf": [
+        {
+          "properties": {
+            "sequence": {"const": 1},
+            "continuation_of": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "sequence": {"type": "integer", "minimum": 2},
+            "continuation_of": {"$ref": "#/$defs/uuidV7"}
+          }
+        }
+      ],
+      "properties": {
+        "take_id": {"$ref": "#/$defs/uuidV7"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "continuation_of": {
+          "oneOf": [{"$ref": "#/$defs/uuidV7"}, {"type": "null"}]
+        }
+      }
+    },
+    "sourceAudioRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "source_artifact_ids", "role"],
+      "properties": {
+        "state": {"const": "recorded"},
+        "source_artifact_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "role": {"const": "audio.wav"}
+      }
+    },
+    "sourceAudioNotRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"const": "not_recorded"},
+        "reason": {"enum": ["user_disabled", "device_default_disabled"]}
+      }
+    },
+    "publishedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "role",
+        "object_key",
+        "media_type",
+        "bytes",
+        "sha256",
+        "provenance"
+      ],
+      "properties": {
+        "artifact_id": {"$ref": "#/$defs/sha256"},
+        "role": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "object_key": {"$ref": "#/$defs/contentObjectKey"},
+        "media_type": {
+          "type": "string",
+          "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+        },
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "provenance": {
+          "oneOf": [
+            {"$ref": "#/$defs/directProvenance"},
+            {"$ref": "#/$defs/normalizedProvenance"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["role"],
+            "properties": {"role": {"enum": ["video.left", "video.right"]}}
+          },
+          "then": {"properties": {"media_type": {"const": "video/mp4"}}}
+        },
+        {
+          "if": {
+            "required": ["role"],
+            "properties": {"role": {"const": "audio.wav"}}
+          },
+          "then": {"properties": {"media_type": {"const": "audio/wav"}}}
+        },
+        {
+          "if": {
+            "required": ["role"],
+            "properties": {"role": {"const": "publication.transform-log"}}
+          },
+          "then": {
+            "properties": {
+              "media_type": {"const": "application/json"},
+              "bytes": {"type": "integer", "minimum": 1},
+              "provenance": {"$ref": "#/$defs/transformLogProvenance"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provenance"],
+            "properties": {
+              "provenance": {
+                "type": "object",
+                "required": ["transform"],
+                "properties": {
+                  "transform": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {"name": {"const": "ylx-transform-log"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "role": {"const": "publication.transform-log"},
+              "media_type": {"const": "application/json"},
+              "bytes": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    },
+    "directProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_artifact_ids"],
+      "properties": {
+        "kind": {"const": "device-artifact"},
+        "source_artifact_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "normalizedProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_artifact_ids", "transform"],
+      "properties": {
+        "kind": {"const": "normalized-output"},
+        "source_artifact_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "parameters"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 128},
+            "version": {"type": "string", "minLength": 1, "maxLength": 64},
+            "parameters": {"type": "object", "additionalProperties": true}
+          }
+        }
+      }
+    },
+    "transformLogProvenance": {
+      "allOf": [
+        {"$ref": "#/$defs/normalizedProvenance"},
+        {
+          "type": "object",
+          "properties": {"transform": {"$ref": "#/$defs/transformLogTransform"}}
+        }
+      ]
+    },
+    "transformLogTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "parameters"],
+      "properties": {
+        "name": {"const": "ylx-transform-log"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "parameters": {"$ref": "#/$defs/transformLogParameters"}
+      }
+    },
+    "transformLogParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "tool", "environment", "exit_status"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "prefixItems": [{"type": "string", "minLength": 1, "maxLength": 4096}],
+          "items": {"type": "string", "maxLength": 4096}
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "build"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 128},
+            "version": {"type": "string", "minLength": 1, "maxLength": 128},
+            "build": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["build_id", "artifact_sha256"],
+              "properties": {
+                "build_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                "artifact_sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 128,
+          "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "additionalProperties": {"type": "string", "maxLength": 4096}
+        },
+        "exit_status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "signal"],
+          "properties": {"code": {"const": 0}, "signal": {"type": "null"}}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "notice": "DRAFT TEST-ONLY ADMISSION VECTOR; NOT ACCEPTED BY RP-YLX AND NOT AUTHORITY",
+  "source_algorithm": "RP-YLX publication.verify_manifest_revision content_fields={schema_version,session_id,captured_at,duration_seconds,total_bytes,video_bytes,integrity_ok,files}; revision=sha256(RP canonical_json_bytes(content_fields)); signature=Ed25519(test-only seed, RP canonicalize_manifest(manifest))",
+  "rp_generator_repo_relative_path": "capture/src/ylx_capture/publication.py",
+  "rp_generator_commit": "2db57ae68e04197397b8ac84f4d71548aa2fcb36",
+  "rp_generator_sha256": "82a3272c96abf6ef1de566ff972745a8fcb86ecb4382be7a7c2afa32af27ac67",
+  "fixture_manifest_path": "contracts/fixtures/publication-signature-v1/admission_manifest.json",
+  "test_only_private_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "revision_content_fields_canonical_utf8": "{\"captured_at\":\"2026-08-01T04:00:00Z\",\"duration_seconds\":121.4,\"files\":[{\"display_path\":\"video/left_00000.mp4\",\"id\":\"f-0001\",\"media_type\":\"video/mp4\",\"role\":\"video_left\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"size_bytes\":483920112},{\"display_path\":\"session.json\",\"id\":\"f-0002\",\"media_type\":\"application/json\",\"role\":\"metadata\",\"sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"size_bytes\":1122}],\"integrity_ok\":true,\"schema_version\":1,\"session_id\":\"sess-0001\",\"total_bytes\":483921234,\"video_bytes\":483920112}",
+  "revision_content_fields_sha256": "2cd66de53bfadb7e26f3a505ce0ae0e94514e3c3c622df33808ac1bd6ed5a097",
+  "signature_canonical_sha256": "1b7a5b625c123afb70412e48403a7390bf6158853b749459be848b81b2d03d62",
+  "signature": "6695dc1406d460b391025ad86897fe8ccf0957a565b1b163cbcbc3fe6cea7c17b9825db50dbb9155cfa850104939c48f209dc70dd3c07faf059560d81a323f0e"
+}

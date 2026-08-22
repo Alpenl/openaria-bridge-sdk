@@ -1,0 +1,25 @@
+{
+  "notice": "SYNTHETIC TEST-ONLY TRUST INPUT; NOT A PRODUCTION REGISTRY OR AUTHORITY",
+  "schema_version": "ylx.trusted-key-registry.v1",
+  "revision": "synthetic-r1",
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2027-01-01T00:00:00Z",
+  "bindings": {
+    "paired-device-001": {
+      "1": {
+        "status": "active",
+        "fingerprint": "sha256:56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+        "not_before": "2026-01-01T00:00:00Z", "not_after": "2027-01-01T00:00:00Z"
+      }
+    },
+    "different-known-device": {
+      "1": {
+        "status": "active",
+        "fingerprint": "sha256:ef1832c29a83ea15a863c0d2daf000d81c2b70872355c34aec96bfec10bbe943",
+        "public_key_hex": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+        "not_before": "2026-01-01T00:00:00Z", "not_after": "2027-01-01T00:00:00Z"
+      }
+    }
+  }
+}

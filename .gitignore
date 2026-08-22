@@ -1,7 +1,21 @@
+# Python-generated files
 __pycache__/
-*.py[cod]
-node_modules/
-dist/
+*.py[oc]
 build/
-target/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local object-store credentials. Existing tracked history still requires
+# provider-side rotation; ignore only prevents future accidental additions.
 .env
+
+# Encoded output. Regenerated from the card on demand; never committed.
+work/
+
+# Recording archives dropped in for a one-off run. Large, and the card is
+# the source of truth for them.
+*.zip

@@ -1,0 +1,161 @@
+{
+  "schema": "ylx.bucket-publication.v2",
+  "publication_id": "0198a200-1000-7000-8000-000000000000",
+  "sealed": true,
+  "published_at": "2026-08-08T14:25:00+08:00",
+  "device": {
+    "device_id": "550e8400-e29b-41d4-a716-446655440000",
+    "device_label": "YLX-30D5872D"
+  },
+  "source_manifest": {
+    "manifest_id": "0198a200-0002-7002-8000-000000000002",
+    "schema": "ylx.device-session.v1",
+    "session_id": "0198a200-0001-7001-8000-000000000001",
+    "volume_id": "20000001-0000-4001-8000-000000000001",
+    "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-79b133cdb865949e650a642ecc41ca6efa970658d691505f268821d1c79c5feb",
+    "bytes": 4152,
+    "sha256": "79b133cdb865949e650a642ecc41ca6efa970658d691505f268821d1c79c5feb"
+  },
+  "take": {
+    "take_id": "0198a200-0000-7000-8000-000000000000",
+    "sequence": 1,
+    "continuation_of": null
+  },
+  "publication_object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/__ylx_evidence__/publication.json",
+  "artifacts": [
+    {
+      "artifact_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "role": "video.left",
+      "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-1111111111111111111111111111111111111111111111111111111111111111",
+      "media_type": "video/mp4",
+      "bytes": 20469134,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "provenance": {
+        "kind": "normalized-output",
+        "source_artifact_ids": [
+          "9999999999999999999999999999999999999999999999999999999999999999",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "transform": {
+          "name": "ylx-stereo-delivery",
+          "version": "1.0.0",
+          "parameters": {
+            "eye": "left",
+            "operation": "ordered-concat",
+            "codec": "h264",
+            "container": "mp4"
+          }
+        }
+      }
+    },
+    {
+      "artifact_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "role": "video.right",
+      "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-2222222222222222222222222222222222222222222222222222222222222222",
+      "media_type": "video/mp4",
+      "bytes": 20691356,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "provenance": {
+        "kind": "normalized-output",
+        "source_artifact_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "transform": {
+          "name": "ylx-stereo-delivery",
+          "version": "1.0.0",
+          "parameters": {
+            "eye": "right",
+            "operation": "ordered-concat",
+            "codec": "h264",
+            "container": "mp4"
+          }
+        }
+      }
+    },
+    {
+      "artifact_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "role": "imu.samples",
+      "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "media_type": "application/x-ndjson",
+      "bytes": 112000,
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        ]
+      }
+    },
+    {
+      "artifact_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "role": "frames.index",
+      "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "media_type": "application/x-ndjson",
+      "bytes": 84000,
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "provenance": {
+        "kind": "device-artifact",
+        "source_artifact_ids": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      }
+    },
+    {
+      "artifact_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "role": "publication.transform-log",
+      "object_key": "synthetic/qualification/ylx-card-pipeline/550e8400-e29b-41d4-a716-446655440000/0198a200-0001-7001-8000-000000000001/f-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "media_type": "application/json",
+      "bytes": 4096,
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "provenance": {
+        "kind": "normalized-output",
+        "source_artifact_ids": [
+          "9999999999999999999999999999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "transform": {
+          "name": "ylx-transform-log",
+          "version": "1.0.0",
+          "parameters": {
+            "command": [
+              "ylx-stereo-delivery",
+              "--left-input-artifact-id",
+              "9999999999999999999999999999999999999999999999999999999999999999",
+              "--left-input-artifact-id",
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "--right-input-artifact-id",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "--right-input-artifact-id",
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "--operation",
+              "ordered-concat",
+              "--codec",
+              "h264",
+              "--container",
+              "mp4"
+            ],
+            "tool": {
+              "name": "ylx-stereo-delivery",
+              "version": "1.0.0",
+              "build": {
+                "build_id": "ylx-stereo-delivery-1.0.0-linux-aarch64",
+                "artifact_sha256": "abababababababababababababababababababababababababababababababab"
+              }
+            },
+            "environment": {
+              "LC_ALL": "C.UTF-8",
+              "TZ": "UTC"
+            },
+            "exit_status": {
+              "code": 0,
+              "signal": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}

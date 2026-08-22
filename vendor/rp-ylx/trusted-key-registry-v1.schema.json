@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ylx.local/trusted-key-registry-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "revision", "issued_at", "expires_at", "bindings"],
+  "properties": {
+    "schema_version": {"const": "ylx.trusted-key-registry.v1"},
+    "notice": {"type": "string"},
+    "revision": {"type": "string", "minLength": 1},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "bindings": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {"pattern": "^[1-9][0-9]*$"},
+        "additionalProperties": {"$ref": "#/$defs/key"}
+      }
+    }
+  },
+  "$defs": {
+    "commonKeyProperties": {
+      "type": "object",
+      "properties": {
+        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "public_key_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "not_before": {"type": "string", "format": "date-time"},
+        "not_after": {"type": "string", "format": "date-time"}
+      }
+    },
+    "key": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "fingerprint", "public_key_hex", "not_before", "not_after"],
+          "properties": {
+            "status": {"const": "active"},
+            "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "public_key_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "not_before": {"type": "string", "format": "date-time"},
+            "not_after": {"type": "string", "format": "date-time"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "fingerprint", "public_key_hex", "not_before", "not_after", "revoked_at"],
+          "properties": {
+            "status": {"const": "revoked"},
+            "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "public_key_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "not_before": {"type": "string", "format": "date-time"},
+            "not_after": {"type": "string", "format": "date-time"},
+            "revoked_at": {"type": "string", "format": "date-time"}
+          }
+        }
+      ]
+    }
+  }
+}
