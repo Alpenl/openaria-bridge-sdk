@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install media tools
@@ -36,7 +36,7 @@ jobs:
         run: >-
           uv export --locked --no-dev --no-emit-project --format requirements-txt
           | uvx pip-audit --no-deps -r /dev/stdin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openaria-bridge-sdk-${{ github.sha }}
           path: dist/
