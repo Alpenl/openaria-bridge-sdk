@@ -1,91 +1,58 @@
 # Open Aria Bridge / SDK
 
-Open Aria Bridge / SDK discovers recordings and exports their verified source
-data with one Python API or CLI. It has two first-class modes:
+Open Aria Bridge finds recordings on the local network or a mounted recording
+card and exports their verified source data. The ordinary product entry point
+is a full-screen terminal interface with no setup and no mode flags.
 
-- **LAN mode** is the default. It discovers `_ylx-capture._tcp.local.`, probes
-  each candidate's Device API v4 identity, lists sealed sessions, and downloads
-  every declared artifact.
-- **Card mode** scans the computer's mounted volumes for an Open Aria recording
-  card. It does not require the user to know the mount path and never writes to
-  the card.
+## Start
 
-Both modes produce the same local session-tree layout. Every manifest and
-artifact is checked against its declared byte count and SHA-256 before the
-completed directory becomes visible.
-
-## Install and verify
-
-Requirements for the integrated export path are Python 3.13 or newer and
-[uv](https://docs.astral.sh/uv/):
+Open a terminal in this checkout and run:
 
 ```bash
 uv sync --locked
-uv run pytest -q
-uv build
-```
-
-The installed command is `openaria-bridge`. Inside this checkout, run it with
-`uv run openaria-bridge`.
-
-## LAN export
-
-The default command browses the local network, shows the discovered device and
-sealed sessions, then asks once before exporting all usable sessions:
-
-```bash
 uv run openaria-bridge
 ```
 
-For unattended use, accept the export without a prompt:
+The installed command is also simply:
 
 ```bash
-uv run openaria-bridge --yes --output ./openaria-export
+openaria-bridge
 ```
 
-If multicast discovery is unavailable, provide the device directly. A bare IP
-uses Device API v4's default HTTP port 8080:
+On startup, Bridge searches for both of these sources at the same time:
 
-```bash
-uv run openaria-bridge --endpoint 192.168.110.36 --yes
-```
+- Open Aria devices advertising `_ylx-capture._tcp.local.` on the LAN
+- Open Aria recording cards mounted by Linux, macOS, or Windows
 
-Use `--device DEVICE_ID_OR_LABEL` when more than one device is present, and
-repeat `--session SESSION_ID` to select specific sessions. A future authenticated
-Device API can receive its bearer token through `OPENARIA_DEVICE_TOKEN`; tokens
-are not accepted as command-line arguments.
+The first available source is opened automatically. Every exportable session
+is selected by default, unavailable sessions are shown but excluded, and the
+primary action displays the exact session count and total size before export.
 
-## Recording-card export
+The default destination is `~/OpenAria Exports`. Its current free space is
+shown in the interface. Use the on-screen **更改目录** action when another
+location is needed. The interface rejects a destination on the source recording
+card and checks available space before starting.
 
-Insert or mount the card and select card mode:
+If automatic LAN discovery is unavailable, choose **手动连接** and
+enter an IP address such as `192.168.110.36`. Bare addresses use the Device API
+v4 default HTTP port 8080.
 
-```bash
-uv run openaria-bridge --mode card
-```
+Keyboard navigation is available throughout the interface:
 
-Linux mount information, macOS `/Volumes`, and Windows drive roots are scanned.
-One detected card is selected automatically; multiple cards produce a numbered
-choice. The detected local path and session summary are shown before the export
-confirmation.
+- `R` rescans the LAN and mounted cards
+- `A` opens manual device connection
+- `O` changes the export destination
+- `Space` selects or clears a session
+- `Q` exits when no export is active
 
-An explicit path remains available for unusual mount layouts or automation:
+`openaria-bridge --help` and `openaria-bridge --version` are the only command
+options. Programs and unattended jobs should use the Python SDK rather than
+screen-scraping the TUI.
 
-```bash
-uv run openaria-bridge \
-  --mode card \
-  --card /media/$USER/OPENARIA \
-  --output ./openaria-export \
-  --yes
-```
+## Python SDK
 
-`uv run main.py --mode card` and `uv run main.py --mode lan` route to the same
-integrated CLI for source-checkout compatibility.
-
-## Python API
-
-The stable import path is `openaria.bridge.sdk`. Discovery, source selection,
-session listing, download/copy, and integrity checks are all handled by one
-object:
+The stable import path is `openaria.bridge.sdk`. The API keeps explicit source
+controls for application integration while the human CLI stays automatic:
 
 ```python
 from openaria.bridge.sdk import OpenAriaSDK
@@ -97,16 +64,18 @@ for session in lan_result.sessions:
     print(session.session_id, session.path, session.total_bytes)
 ```
 
-For a non-interactive program with multiple sources, pass `device=...`,
-`endpoint=...`, or `card=...`. `discover()` and `list_sessions()` expose the
-same immutable `Source` and `SessionInfo` values used by `export()`.
+Applications may call `discover()` and `list_sessions()` before export. They
+may also provide `endpoint=...`, `card=...`, `device=...`, or a one-call
+`export(output=...)` destination override. A future authenticated Device API
+can receive its bearer token through `OPENARIA_DEVICE_TOKEN`; tokens are never
+accepted as command-line arguments.
 
 ## Output and integrity
 
-Exports are grouped by device label and session ID:
+LAN and recording-card sources produce the same session tree:
 
 ```text
-openaria-export/
+OpenAria Exports/
   YLX-30D5872D/
     SESSION_ID/
       manifest.json
@@ -116,43 +85,29 @@ openaria-export/
       .openaria-export.json
 ```
 
-The final receipt records the source mode and location, device identity,
-manifest digest, and every artifact's role, path, size, and SHA-256. A session
-is assembled in a private staging directory and published with one directory
-rename. A failed or mismatched download therefore does not appear as a complete
-export. Re-running against an already matching export verifies and reuses it.
+The receipt records source mode and location, device identity, manifest digest,
+and every artifact's role, path, size, and SHA-256. Bridge checks the manifest,
+safe relative paths, exact byte counts, and every artifact SHA-256 before a
+completed session directory becomes visible. LAN exports additionally validate
+Device API v4 identity, required capabilities, response ETags, content lengths,
+and media types.
 
-mDNS records are discovery candidates, not trusted device identities. The SDK
-accepts a LAN source only after its `/api/v4/device` response identifies a
-supported Device API v4 device with session-list, session-detail, and artifact
-download capability. Manifest response headers, exact manifest bytes, artifact
-ETags, content lengths, safe relative paths, and artifact SHA-256 values are
-then checked before publication.
+Each session is assembled in a hidden staging directory and published with one
+directory rename. Failed exports do not appear complete. Running an export
+again revalidates and reuses an already matching destination.
 
-## Advanced compatibility pipeline
+## Development
 
-The original normalization and S3-compatible publication pipeline remains in
-`main.py` for existing automation. Its invocation is unchanged:
+The integrated path requires Python 3.13 or newer. Verify and build it with:
 
 ```bash
-uv run main.py \
-  --card /mnt/recording-card \
-  --work ./work \
-  --bucket recordings \
-  --device-id DEVICE_ID
+uv run pytest -q
+uv build
 ```
 
-That advanced path additionally requires `ffmpeg`/`ffprobe` and object-store
-configuration through `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and
-`S3_REGION`. A local normalization run can still use `--skip-upload`, and the
-existing `main.py export-sbs` command remains available.
+The historical normalization, SBS, and S3-compatible publication workflows in
+`main.py` remain available to existing automation. They are compatibility
+interfaces and are not part of the `openaria-bridge` TUI.
 
-## Provenance and license
-
-Query local build and artifact metadata with:
-
-```bash
-uv run provenance.py --repository . --artifact dist/FILE
-```
-
-See [LICENSE](LICENSE).
+Query local source and artifact provenance with `uv run provenance.py`. See
+[LICENSE](LICENSE).
