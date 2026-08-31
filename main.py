@@ -2655,7 +2655,7 @@ def _pipeline_version() -> str:
     try:
         return importlib.metadata.version("ylx-card-pipeline")
     except importlib.metadata.PackageNotFoundError:
-        return "0.2.0"
+        return "0.3.0"
 
 
 @lru_cache(maxsize=1)
@@ -5029,7 +5029,7 @@ def export_sbs_cli(argv: list[str] | None = None) -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "export-sbs":
         return export_sbs_cli(sys.argv[2:])
-    integrated_flags = {"--mode", "--endpoint", "--output", "--yes", "--list"}
+    integrated_flags = {"--version"}
     if len(sys.argv) == 1 or any(
         argument in integrated_flags
         or any(argument.startswith(f"{flag}=") for flag in integrated_flags)

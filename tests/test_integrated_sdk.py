@@ -30,7 +30,6 @@ from openaria.bridge.sdk._lan import (
     endpoints_from_service_info,
     normalize_api_base,
 )
-from openaria.bridge.sdk.cli import main as cli_main
 
 SESSION_ID = "01989f6c-2c00-7a1b-8c2d-3e4f50617283"
 DEVICE_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -73,31 +72,23 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
     assert repeated.sessions[0].reused is True
 
 
-def test_card_mode_explicit_path_and_cli_yes_export(tmp_path: Path, capsys) -> None:
+def test_card_mode_explicit_path_and_export_override(tmp_path: Path) -> None:
     card = tmp_path / "card"
     _build_card(card)
-    output = tmp_path / "cli-export"
-
-    status = cli_main(
-        [
-            "--mode",
-            "card",
-            "--card",
-            str(card),
-            "--output",
-            str(output),
-            "--yes",
-        ]
+    output = tmp_path / "chosen-export"
+    sdk = OpenAriaSDK(
+        mode="card",
+        card=card,
+        output=tmp_path / "unused-default",
     )
 
-    assert status == 0
+    result = sdk.export(output=output)
+
+    assert result.output_root == output.resolve()
     assert (output / DEVICE_LABEL / SESSION_ID / "manifest.json").is_file()
-    stdout = capsys.readouterr().out
-    assert "Mode:     card" in stdout
-    assert "Done: 1 session(s)" in stdout
 
 
-@pytest.mark.parametrize("arguments", ([], ["--mode", "card", "--yes"]))
+@pytest.mark.parametrize("arguments", ([], ["--version"]))
 def test_legacy_main_dispatches_integrated_cli(
     arguments: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -185,9 +176,7 @@ def test_lan_digest_mismatch_leaves_no_partial_session(tmp_path: Path) -> None:
     assert not device_root.exists() or not tuple(device_root.glob("*.part"))
 
 
-def test_gateway_unusable_session_is_visible_but_not_exported(
-    tmp_path: Path, capsys
-) -> None:
+def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) -> None:
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
     with _device_api(
@@ -203,20 +192,11 @@ def test_gateway_unusable_session_is_visible_but_not_exported(
         assert "unusable" in (sessions[0].unavailable_reason or "")
         result = sdk.export(source=source)
 
-        status = cli_main(
-            [
-                "--endpoint",
-                endpoint,
-                "--session",
-                SESSION_ID,
-                "--yes",
-            ]
-        )
+        with pytest.raises(ExportError, match="requested session.*not exportable"):
+            sdk.export(source=source, session_ids=[SESSION_ID])
 
     assert result.sessions == ()
     assert result.unavailable_sessions == sessions
-    assert status == 2
-    assert "requested session(s) are not exportable" in capsys.readouterr().err
 
 
 def test_lan_pagination_rejects_catalog_revision_change(tmp_path: Path) -> None:

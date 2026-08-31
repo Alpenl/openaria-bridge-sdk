@@ -161,6 +161,7 @@ class OpenAriaSDK:
         *,
         source: Source | None = None,
         session_ids: Iterable[str] | None = None,
+        output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> ExportResult:
         """Discover, select, and atomically export verified sessions."""
@@ -192,7 +193,9 @@ class OpenAriaSDK:
             )
             raise ExportError(f"requested session(s) are not exportable: {detail}")
 
-        output_root = self.output.resolve()
+        output_root = (
+            self.output if output is None else Path(output).expanduser()
+        ).resolve()
         exported = []
         if selected.mode is SourceMode.LAN:
             client = DeviceApiClient(

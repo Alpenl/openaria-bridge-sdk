@@ -28,6 +28,8 @@ EXPECTED_RUNTIME_PATHS = {
     "openaria/bridge/sdk/client.py",
     "openaria/bridge/sdk/errors.py",
     "openaria/bridge/sdk/models.py",
+    "openaria/bridge/sdk/openaria.tcss",
+    "openaria/bridge/sdk/tui.py",
     "vendor/ylx-contracts/SOURCE.json",
     "vendor/ylx-contracts/ylx-bucket-publication-v2.schema.json",
     "vendor/ylx-contracts/ylx-bucket-publication-v3.schema.json",
