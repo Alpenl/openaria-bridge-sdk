@@ -42,3 +42,17 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
+
+  installer-macos:
+    name: Installer / macOS
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Run installer black-box tests
+        run: uv run --locked pytest -q tests/test_installer.py
