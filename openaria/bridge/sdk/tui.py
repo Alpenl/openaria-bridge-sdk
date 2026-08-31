@@ -138,7 +138,7 @@ class OpenAriaTUI(App[None]):
 
     CSS_PATH = "openaria.tcss"
     TITLE = "Open Aria"
-    SUB_TITLE = "数据导出"
+    SUB_TITLE = "成片导出"
     ENABLE_COMMAND_PALETTE: ClassVar[bool] = False
     HORIZONTAL_BREAKPOINTS: ClassVar[list[tuple[int, str]]] = [
         (0, "-narrow"),
@@ -192,7 +192,7 @@ class OpenAriaTUI(App[None]):
                     yield Static("", id="unavailable-summary")
             with Horizontal(id="transfer-bar"):
                 with Vertical(id="destination"):
-                    yield Static("导出到", id="destination-label")
+                    yield Static("成片保存到", id="destination-label")
                     yield Static("", id="destination-path")
                 yield Button("更改目录", id="change-output")
                 yield Button("请选择会话", variant="primary", id="export")
@@ -581,15 +581,17 @@ class OpenAriaTUI(App[None]):
             if session.session_id in selected_ids
         )
         free_bytes = _free_bytes(self.export_root)
-        if free_bytes is not None and total_bytes > free_bytes:
+        required_bytes = _required_export_bytes(total_bytes)
+        if free_bytes is not None and required_bytes > free_bytes:
             self.notify("导出目录可用空间不足", severity="error")
             self._set_status(
-                f"需要 {_human_bytes(total_bytes)}，仅剩 {_human_bytes(free_bytes)}",
+                f"处理期间需要约 {_human_bytes(required_bytes)}，仅剩 "
+                f"{_human_bytes(free_bytes)}",
                 error=True,
             )
             return
         self._exporting = True
-        self._set_status("正在准备导出", busy=True)
+        self._set_status("正在准备下载并生成成片", busy=True)
         self._update_controls()
         self.run_worker(
             lambda: self._run_export(binding, session_ids),
@@ -634,10 +636,10 @@ class OpenAriaTUI(App[None]):
         reused = sum(session.reused for session in result.sessions)
         detail = f" · 复用 {reused} 个" if reused else ""
         self._set_status(
-            f"导出完成：{result.exported_count} 个会话 · "
+            f"成片导出完成：{result.exported_count} 个会话 · "
             f"{_human_bytes(result.total_bytes)}{detail}"
         )
-        self.notify(f"数据已导出到 {result.output_root}", timeout=6)
+        self.notify(f"成片已保存到 {result.output_root}", timeout=6)
         self._render_destination()
         self._update_controls()
 
@@ -670,7 +672,7 @@ class OpenAriaTUI(App[None]):
     def _render_export_button(self) -> None:
         button = self.query_one("#export", Button)
         if self._exporting:
-            button.label = "正在导出..."
+            button.label = "正在生成成片..."
             button.disabled = True
             return
         selected = set(self.query_one("#sessions", SelectionList).selected)
@@ -680,7 +682,7 @@ class OpenAriaTUI(App[None]):
             if session.session_id in selected
         )
         if selected:
-            button.label = f"导出 {len(selected)} 个会话 · {_human_bytes(total)}"
+            button.label = f"生成 {len(selected)} 个成片 · {_human_bytes(total)}"
         else:
             button.label = "请选择会话"
         button.disabled = not selected or self._sessions_loading or self._connecting
@@ -765,3 +767,8 @@ def _human_bytes(value: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     raise AssertionError("unreachable")
+
+
+def _required_export_bytes(source_bytes: int) -> int:
+    # Rendering briefly keeps verified source bytes and the final MP4 together.
+    return source_bytes * 2

@@ -48,13 +48,16 @@ class SessionInfo:
 
 @dataclasses.dataclass(frozen=True)
 class ExportedSession:
-    """Result of one verified session export."""
+    """Result of one verified source export and synchronized video render."""
 
     session_id: str
     path: Path
     artifact_count: int
     total_bytes: int
     reused: bool = False
+    # ``path`` remains the session directory for 0.3 callers.
+    media_path: Path | None = None
+    media_bytes: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
