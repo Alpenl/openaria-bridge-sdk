@@ -100,6 +100,13 @@ def test_wheel_registers_integrated_openaria_bridge_command(
     assert "openaria-bridge = openaria.bridge.sdk.cli:main" in contents
 
 
+def test_source_distribution_includes_release_installer(
+    built_distributions: tuple[Path, Path],
+) -> None:
+    _, sdist = built_distributions
+    assert "install.sh" in _sdist_runtime_names(sdist)
+
+
 @pytest.mark.parametrize("distribution_name", ("wheel", "sdist"))
 def test_installed_distribution_loads_vendored_contract_validators_outside_checkout(
     tmp_path: Path,

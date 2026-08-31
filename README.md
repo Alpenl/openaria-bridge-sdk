@@ -5,19 +5,40 @@ card, verifies every source file, and automatically produces playable videos.
 The ordinary product entry point is a full-screen terminal interface with no
 setup and no mode flags.
 
+## Install
+
+On Linux or macOS, install the latest verified release with:
+
+```bash
+curl -LsSf https://github.com/Alpenl/openaria-bridge-sdk/releases/latest/download/install.sh | sh
+```
+
+The installer verifies the release checksums, installs `uv` when needed, and
+creates an isolated tool environment with Python 3.13. `uv` reuses a compatible
+interpreter when available and downloads one when needed; it does not install
+packages into the system Python environment. The command is installed to
+`~/.local/bin` by default, and the installer prints the exact PATH instruction
+when that directory is not already available in the current shell.
+
+Run the same command again to upgrade to the latest release. To uninstall:
+
+```bash
+uv tool uninstall ylx-card-pipeline
+```
+
 ## Start
 
-Open a terminal in this checkout and run:
+After installation, launch the terminal interface with:
+
+```bash
+openaria-bridge
+```
+
+For development from a source checkout, run:
 
 ```bash
 uv sync --locked
 uv run openaria-bridge
-```
-
-The installed command is also simply:
-
-```bash
-openaria-bridge
 ```
 
 On startup, Bridge searches for both of these sources at the same time:

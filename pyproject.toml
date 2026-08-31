@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ylx-card-pipeline"
-version = "0.4.0"
+version = "0.4.1"
 description = "Open Aria Bridge SDK and CLI for verified recording import and publication"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -32,6 +32,7 @@ pythonpath = ["."]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/install.sh",
     "/main.py",
     "/provenance.py",
     "/openaria",
