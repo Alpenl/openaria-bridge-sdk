@@ -13,15 +13,15 @@ def _version() -> str:
     try:
         return importlib.metadata.version("ylx-card-pipeline")
     except importlib.metadata.PackageNotFoundError:
-        return "0.3.0"
+        return "0.4.0"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="openaria-bridge",
         description=(
-            "Open the automatic Open Aria exporter. It discovers LAN devices and "
-            "mounted recording cards without setup."
+            "Open the automatic Open Aria video exporter. It discovers LAN "
+            "devices and mounted recording cards without setup."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")

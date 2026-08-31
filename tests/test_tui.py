@@ -129,6 +129,8 @@ class FakeSDK:
                     path=destination,
                     artifact_count=1,
                     total_bytes=READY_SESSION.total_bytes,
+                    media_path=destination / "recording.mp4",
+                    media_bytes=6_000,
                 ),
             ),
         )
@@ -160,7 +162,7 @@ def test_tui_discovers_both_modes_preselects_and_exports(tmp_path: Path) -> None
             assert "机身标记为不可用" in str(unavailable.content)
             export_button = app.query_one("#export", Button)
             assert export_button.disabled is False
-            assert "导出 1 个会话" in str(export_button.label)
+            assert "生成 1 个成片" in str(export_button.label)
             assert app.focused is sessions, repr(app.focused)
 
             await pilot.press("space")

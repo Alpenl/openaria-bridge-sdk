@@ -1,8 +1,9 @@
 # Open Aria Bridge / SDK
 
 Open Aria Bridge finds recordings on the local network or a mounted recording
-card and exports their verified source data. The ordinary product entry point
-is a full-screen terminal interface with no setup and no mode flags.
+card, verifies every source file, and automatically produces playable videos.
+The ordinary product entry point is a full-screen terminal interface with no
+setup and no mode flags.
 
 ## Start
 
@@ -61,7 +62,7 @@ lan_result = OpenAriaSDK(mode="lan", output="./exports").export()
 card_result = OpenAriaSDK(mode="card", output="./exports").export()
 
 for session in lan_result.sessions:
-    print(session.session_id, session.path, session.total_bytes)
+    print(session.session_id, session.media_path, session.media_bytes)
 ```
 
 Applications may call `discover()` and `list_sessions()` before export. They
@@ -72,29 +73,46 @@ accepted as command-line arguments.
 
 ## Output and integrity
 
-LAN and recording-card sources produce the same session tree:
+LAN and recording-card sources produce the same user-facing result:
 
 ```text
 OpenAria Exports/
   YLX-30D5872D/
     SESSION_ID/
-      manifest.json
-      video/...
-      audio/...
-      imu/...
-      .openaria-export.json
+      recording.mp4
+      .openaria/
+        export.json
+        media.json
+        source/
+          manifest.json
+          imu/...
 ```
 
-The receipt records source mode and location, device identity, manifest digest,
-and every artifact's role, path, size, and SHA-256. Bridge checks the manifest,
-safe relative paths, exact byte counts, and every artifact SHA-256 before a
-completed session directory becomes visible. LAN exports additionally validate
-Device API v4 identity, required capabilities, response ETags, content lengths,
-and media types.
+`recording.mp4` is the finished side-by-side stereo video. Bridge joins every
+left-eye and right-eye MP4 segment in manifest order, places the eyes side by
+side, joins all WAV segments, aligns audio using the Device Session monotonic
+timeline, and writes H.264 video with AAC audio. FFmpeg is included with the
+Python package; users do not install or configure it separately.
 
-Each session is assembled in a hidden staging directory and published with one
-directory rename. Failed exports do not appear complete. Running an export
-again revalidates and reuses an already matching destination.
+The internal receipt records source mode and location, device identity,
+manifest digest, final-video digest, synchronization offset, and every source
+artifact's role, path, size, and SHA-256. Bridge checks safe relative paths,
+exact byte counts, and every artifact SHA-256 before rendering. LAN exports
+additionally validate Device API v4 identity, required capabilities, response
+ETags, content lengths, and media types. The source manifest and non-media
+metadata remain under `.openaria/source` for traceability. Verified left/right
+MP4 and WAV segments are task-owned temporary inputs: Bridge removes them only
+after rendering, output probing, frame-count verification, and timeline
+alignment all pass. A cleanup failure keeps the export incomplete.
+
+Each session is downloaded and rendered in a hidden staging directory, the
+finished MP4 is decoded briefly to validate its video and expected audio
+streams, and the whole session is published with one directory rename. Failed
+downloads, renders, or cleanup operations do not appear complete. Running an
+export again revalidates the retained source evidence and final-media SHA-256
+and reuses a matching destination.
+Verified source-tree exports made by version 0.3 are upgraded to the finished
+layout the next time that session is exported.
 
 ## Development
 

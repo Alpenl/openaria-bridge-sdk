@@ -16,6 +16,7 @@ import pytest
 from zeroconf import ServiceInfo
 
 import main as legacy_main
+import openaria.bridge.sdk._export as export_module
 from openaria.bridge.sdk import (
     ContractError,
     ExportError,
@@ -30,10 +31,42 @@ from openaria.bridge.sdk._lan import (
     endpoints_from_service_info,
     normalize_api_base,
 )
+from openaria.bridge.sdk._media import FINAL_MEDIA_NAME, RenderedMedia
 
 SESSION_ID = "01989f6c-2c00-7a1b-8c2d-3e4f50617283"
 DEVICE_ID = "550e8400-e29b-41d4-a716-446655440000"
 DEVICE_LABEL = "YLX-30D5872D"
+
+
+def _is_media_path(relative: str) -> bool:
+    return relative.startswith(("video/", "audio/"))
+
+
+@pytest.fixture(autouse=True)
+def _stub_final_media_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
+    def render(
+        session_root: Path,
+        manifest_bytes: bytes,
+        output: Path,
+        progress=None,
+    ) -> RenderedMedia:
+        payload = b"synthetic-final-mp4"
+        output.write_bytes(payload)
+        if progress is not None:
+            progress("final recording verified")
+        return RenderedMedia(
+            path=output,
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            has_audio=False,
+            video_segment_count=1,
+            audio_segment_count=0,
+            video_start_time_seconds=0,
+            audio_start_time_seconds=None,
+            audio_offset_seconds=None,
+        )
+
+    monkeypatch.setattr(export_module, "render_session_video", render)
 
 
 def test_card_mode_discovers_mount_and_exports_same_verified_tree(
@@ -60,16 +93,45 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
 
     destination = output.resolve() / DEVICE_LABEL / SESSION_ID
     assert result.sessions[0].path == destination
-    assert (destination / "manifest.json").read_bytes() == manifest_bytes
+    assert result.sessions[0].media_path == destination / FINAL_MEDIA_NAME
+    assert (destination / FINAL_MEDIA_NAME).read_bytes() == b"synthetic-final-mp4"
+    source_tree = destination / ".openaria" / "source"
+    assert (source_tree / "manifest.json").read_bytes() == manifest_bytes
     for relative, payload in payloads.items():
-        assert (destination / relative).read_bytes() == payload
-    receipt = json.loads((destination / ".openaria-export.json").read_text())
-    assert receipt["schema"] == "openaria.bridge-export.v1"
+        if _is_media_path(relative):
+            assert not (source_tree / relative).exists()
+        else:
+            assert (source_tree / relative).read_bytes() == payload
+    receipt = json.loads((destination / ".openaria" / "export.json").read_text())
+    assert receipt["schema"] == "openaria.bridge-export.v2"
     assert receipt["mode"] == "card"
     assert receipt["session_id"] == SESSION_ID
+    media = json.loads((destination / ".openaria" / "media.json").read_text())
+    assert media["schema"] == "openaria.media-export.v1"
+    assert media["output"]["path"] == FINAL_MEDIA_NAME
+    assert media["timeline"]["verdict"] == "aligned"
+    assert media["cleanup"]["status"] == "complete"
+    assert media["cleanup"]["removed_paths"] == [
+        "video/left_00000.mp4",
+        "video/right_00000.mp4",
+    ]
 
     repeated = sdk.export(source=sources[0])
     assert repeated.sessions[0].reused is True
+
+
+def test_modified_final_video_is_never_reused(tmp_path: Path) -> None:
+    card = tmp_path / "mounted-card"
+    _build_card(card)
+    sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "export")
+
+    first = sdk.export()
+    media_path = first.sessions[0].media_path
+    assert media_path is not None
+    media_path.write_bytes(b"modified-final-video")
+
+    with pytest.raises(ExportError, match="destination already exists"):
+        sdk.export()
 
 
 def test_card_mode_explicit_path_and_export_override(tmp_path: Path) -> None:
@@ -85,7 +147,81 @@ def test_card_mode_explicit_path_and_export_override(tmp_path: Path) -> None:
     result = sdk.export(output=output)
 
     assert result.output_root == output.resolve()
-    assert (output / DEVICE_LABEL / SESSION_ID / "manifest.json").is_file()
+    assert (output / DEVICE_LABEL / SESSION_ID / FINAL_MEDIA_NAME).is_file()
+
+
+def test_existing_03_source_tree_is_upgraded_and_then_reused(tmp_path: Path) -> None:
+    card = tmp_path / "card"
+    manifest_bytes, payloads, _ = _build_card(card)
+    output = tmp_path / "export"
+    legacy = output / DEVICE_LABEL / SESSION_ID
+    legacy.mkdir(parents=True)
+    (legacy / "manifest.json").write_bytes(manifest_bytes)
+    for relative, payload in payloads.items():
+        path = legacy / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    (legacy / ".openaria-export.json").write_text("{}\n", encoding="utf-8")
+    sdk = OpenAriaSDK(mode="card", card=card, output=output)
+
+    upgraded = sdk.export()
+
+    assert upgraded.sessions[0].reused is False
+    assert (legacy / FINAL_MEDIA_NAME).is_file()
+    assert not (legacy / "manifest.json").exists()
+    assert not (legacy / "video").exists()
+    source_tree = legacy / ".openaria" / "source"
+    assert (source_tree / "manifest.json").read_bytes() == manifest_bytes
+    for relative, payload in payloads.items():
+        if _is_media_path(relative):
+            assert not (source_tree / relative).exists()
+        else:
+            assert (source_tree / relative).read_bytes() == payload
+
+    repeated = sdk.export()
+    assert repeated.sessions[0].reused is True
+
+
+def test_media_render_failure_leaves_no_complete_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    output = tmp_path / "export"
+
+    def fail_render(*args: Any, **kwargs: Any) -> RenderedMedia:
+        raise ExportError("synthetic render failure")
+
+    monkeypatch.setattr(export_module, "render_session_video", fail_render)
+    sdk = OpenAriaSDK(mode="card", card=card, output=output)
+
+    with pytest.raises(ExportError, match="synthetic render failure"):
+        sdk.export()
+
+    destination = output / DEVICE_LABEL / SESSION_ID
+    assert not destination.exists()
+    device_root = output / DEVICE_LABEL
+    assert not device_root.exists() or not tuple(device_root.glob("*.part"))
+
+
+def test_media_cleanup_failure_leaves_no_complete_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    output = tmp_path / "export"
+
+    def fail_cleanup(*args: Any, **kwargs: Any) -> tuple[str, ...]:
+        raise ExportError("synthetic cleanup failure")
+
+    monkeypatch.setattr(export_module, "_remove_media_inputs", fail_cleanup)
+    sdk = OpenAriaSDK(mode="card", card=card, output=output)
+
+    with pytest.raises(ExportError, match="synthetic cleanup failure"):
+        sdk.export()
+
+    destination = output / DEVICE_LABEL / SESSION_ID
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize("arguments", ([], ["--version"]))
@@ -148,10 +284,15 @@ def test_lan_mode_discovers_probes_and_downloads_without_network_mutation_field(
     assert (
         destination == (tmp_path / "lan-export").resolve() / DEVICE_LABEL / SESSION_ID
     )
-    assert (destination / "manifest.json").read_bytes() == manifest_bytes
+    source_tree = destination / ".openaria" / "source"
+    assert (destination / FINAL_MEDIA_NAME).is_file()
+    assert (source_tree / "manifest.json").read_bytes() == manifest_bytes
     for relative, payload in payloads.items():
-        assert (destination / relative).read_bytes() == payload
-    receipt = json.loads((destination / ".openaria-export.json").read_text())
+        if _is_media_path(relative):
+            assert not (source_tree / relative).exists()
+        else:
+            assert (source_tree / relative).read_bytes() == payload
+    receipt = json.loads((destination / ".openaria" / "export.json").read_text())
     assert receipt["mode"] == "lan"
     assert receipt["source"].endswith("/api/v4")
 
@@ -232,7 +373,7 @@ def test_manifest_path_traversal_is_rejected(path: str) -> None:
         artifacts_from_manifest(json.dumps(manifest).encode(), SESSION_ID)
 
 
-def test_manifest_cannot_overwrite_export_receipt(tmp_path: Path) -> None:
+def test_manifest_artifact_cannot_overwrite_source_manifest(tmp_path: Path) -> None:
     payload = b"receipt collision"
     manifest = {
         "schema": "ylx.device-session.v2",
@@ -240,7 +381,7 @@ def test_manifest_cannot_overwrite_export_receipt(tmp_path: Path) -> None:
         "artifact": {
             "artifact_id": hashlib.sha256(payload).hexdigest(),
             "role": "metadata",
-            "path": ".OPENARIA-EXPORT.JSON",
+            "path": "MANIFEST.JSON",
             "media_type": "application/json",
             "bytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),

@@ -20,8 +20,8 @@ class OpenAriaSDK:
     """Discover one Open Aria source and export its sealed sessions.
 
     ``lan`` is the default product path. ``card`` discovers a mounted recording
-    card without requiring its mount path. Both modes write the same verified
-    session-tree output and return the same result models.
+    card without requiring its mount path. Both modes write the same verified,
+    synchronized final-video output and return the same result models.
     """
 
     def __init__(
@@ -164,7 +164,7 @@ class OpenAriaSDK:
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> ExportResult:
-        """Discover, select, and atomically export verified sessions."""
+        """Discover, verify, render, and atomically export finished recordings."""
 
         selected = self.select_source(source)
         sessions = self.list_sessions(selected)
