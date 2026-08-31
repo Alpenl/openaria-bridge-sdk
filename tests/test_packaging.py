@@ -16,6 +16,18 @@ import pytest
 EXPECTED_RUNTIME_PATHS = {
     "main.py",
     "provenance.py",
+    "openaria/__init__.py",
+    "openaria/bridge/__init__.py",
+    "openaria/bridge/sdk/__init__.py",
+    "openaria/bridge/sdk/__main__.py",
+    "openaria/bridge/sdk/_card.py",
+    "openaria/bridge/sdk/_export.py",
+    "openaria/bridge/sdk/_json.py",
+    "openaria/bridge/sdk/_lan.py",
+    "openaria/bridge/sdk/cli.py",
+    "openaria/bridge/sdk/client.py",
+    "openaria/bridge/sdk/errors.py",
+    "openaria/bridge/sdk/models.py",
     "vendor/ylx-contracts/SOURCE.json",
     "vendor/ylx-contracts/ylx-bucket-publication-v2.schema.json",
     "vendor/ylx-contracts/ylx-bucket-publication-v3.schema.json",
@@ -71,6 +83,20 @@ def test_built_distributions_include_entry_module_and_vendored_contracts(
     assert EXPECTED_RUNTIME_PATHS <= _sdist_runtime_names(sdist)
 
 
+def test_wheel_registers_integrated_openaria_bridge_command(
+    built_distributions: tuple[Path, Path],
+) -> None:
+    wheel, _ = built_distributions
+    with zipfile.ZipFile(wheel) as archive:
+        entry_points = next(
+            name
+            for name in archive.namelist()
+            if name.endswith(".dist-info/entry_points.txt")
+        )
+        contents = archive.read(entry_points).decode("utf-8")
+    assert "openaria-bridge = openaria.bridge.sdk.cli:main" in contents
+
+
 @pytest.mark.parametrize("distribution_name", ("wheel", "sdist"))
 def test_installed_distribution_loads_vendored_contract_validators_outside_checkout(
     tmp_path: Path,
@@ -106,6 +132,7 @@ def test_installed_distribution_loads_vendored_contract_validators_outside_check
 import json
 import main
 import provenance
+from openaria.bridge.sdk import OpenAriaSDK, SourceMode
 
 device = main._device_session_v1_validator()
 device_v2 = main._device_session_v2_validator()
@@ -122,6 +149,8 @@ print(json.dumps({
     "bucket_v3_schema": bucket_v3.schema["$id"],
     "fixture": str(fixture),
     "fixture_schema": json.loads(fixture.read_text(encoding="utf-8"))["schema"],
+    "sdk_module": OpenAriaSDK.__module__,
+    "lan_mode": SourceMode.LAN.value,
 }, sort_keys=True))
 """
     loaded = subprocess.run(
@@ -143,6 +172,8 @@ print(json.dumps({
     assert result["bucket_schema"] == "urn:ylx:schema:bucket-publication:v2"
     assert result["bucket_v3_schema"] == "urn:ylx:schema:bucket-publication:v3"
     assert result["fixture_schema"] == "ylx.device-session.v2"
+    assert result["sdk_module"] == "openaria.bridge.sdk.client"
+    assert result["lan_mode"] == "lan"
 
 
 def _pythonpath_env(target: Path) -> dict[str, str]:

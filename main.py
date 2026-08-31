@@ -2655,7 +2655,7 @@ def _pipeline_version() -> str:
     try:
         return importlib.metadata.version("ylx-card-pipeline")
     except importlib.metadata.PackageNotFoundError:
-        return "0.1.0"
+        return "0.2.0"
 
 
 @lru_cache(maxsize=1)
@@ -2666,9 +2666,11 @@ def _pipeline_distribution_sha256() -> str:
         path = root / relative
         if path.is_file():
             entries.append(f"{relative}\0{sha256_of(path)}")
-    vendor = root / "vendor"
-    if vendor.is_dir():
-        for path in sorted(item for item in vendor.rglob("*") if item.is_file()):
+    for directory_name in ("openaria", "vendor"):
+        directory = root / directory_name
+        if not directory.is_dir():
+            continue
+        for path in sorted(item for item in directory.rglob("*") if item.is_file()):
             relative = path.relative_to(root).as_posix()
             entries.append(f"{relative}\0{sha256_of(path)}")
     if not entries:
@@ -5027,6 +5029,15 @@ def export_sbs_cli(argv: list[str] | None = None) -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "export-sbs":
         return export_sbs_cli(sys.argv[2:])
+    integrated_flags = {"--mode", "--endpoint", "--output", "--yes", "--list"}
+    if len(sys.argv) == 1 or any(
+        argument in integrated_flags
+        or any(argument.startswith(f"{flag}=") for flag in integrated_flags)
+        for argument in sys.argv[1:]
+    ):
+        from openaria.bridge.sdk.cli import main as integrated_main
+
+        return integrated_main(sys.argv[1:])
 
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
