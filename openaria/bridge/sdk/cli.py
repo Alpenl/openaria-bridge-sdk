@@ -100,6 +100,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.list:
             return 0
         selected = _selected_sessions(sessions, args.session_ids)
+        unavailable = tuple(session for session in selected if not session.exportable)
+        if args.session_ids is not None and unavailable:
+            detail = ", ".join(
+                f"{session.session_id} ({session.unavailable_reason})"
+                for session in unavailable
+            )
+            raise OpenAriaError(f"requested session(s) are not exportable: {detail}")
         available = tuple(session for session in selected if session.exportable)
         if not available:
             print("Nothing to export: no usable sealed sessions found.")

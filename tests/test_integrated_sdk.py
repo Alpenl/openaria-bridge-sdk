@@ -185,7 +185,9 @@ def test_lan_digest_mismatch_leaves_no_partial_session(tmp_path: Path) -> None:
     assert not device_root.exists() or not tuple(device_root.glob("*.part"))
 
 
-def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) -> None:
+def test_gateway_unusable_session_is_visible_but_not_exported(
+    tmp_path: Path, capsys
+) -> None:
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
     with _device_api(
@@ -201,8 +203,20 @@ def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) ->
         assert "unusable" in (sessions[0].unavailable_reason or "")
         result = sdk.export(source=source)
 
+        status = cli_main(
+            [
+                "--endpoint",
+                endpoint,
+                "--session",
+                SESSION_ID,
+                "--yes",
+            ]
+        )
+
     assert result.sessions == ()
     assert result.unavailable_sessions == sessions
+    assert status == 2
+    assert "requested session(s) are not exportable" in capsys.readouterr().err
 
 
 def test_lan_pagination_rejects_catalog_revision_change(tmp_path: Path) -> None:
