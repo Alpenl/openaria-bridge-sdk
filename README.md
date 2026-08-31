@@ -1,44 +1,23 @@
 # Open Aria Bridge / SDK
 
-Open Aria Bridge / SDK is frozen compatibility tooling for historical Open
-Aria recording cards. It can inspect completed legacy sessions, validate the
-card's cryptographic and content claims, normalize stereo video, carry verified
-IMU and metadata artifacts forward, and publish an idempotent object-store
-layout.
+Open Aria Bridge / SDK discovers recordings and exports their verified source
+data with one Python API or CLI. It has two first-class modes:
 
-[Score D-049](https://github.com/mirrorbloom/openaria-score/blob/main/docs/DECISIONS.md#d-049-fixed-storage-and-lan-only-delivery-removable-and-interruption-workflows-retired)
-makes Bridge / Desktop's LAN workflow the only current 0.5 import and
-publication route. This repository is not a current product entry point,
-release artifact, or acceptance gate. No new removable-media, safe-swap,
-ENOSPC/inode-exhaustion, or unexpected-interruption recovery work is planned
-here.
+- **LAN mode** is the default. It discovers `_ylx-capture._tcp.local.`, probes
+  each candidate's Device API v4 identity, lists sealed sessions, and downloads
+  every declared artifact.
+- **Card mode** scans the computer's mounted volumes for an Open Aria recording
+  card. It does not require the user to know the mount path and never writes to
+  the card.
 
-The retained implementation exposes a Python API in `main.py` and a command
-line entry through that module. The distribution name remains
-`ylx-card-pipeline` for compatibility; a stable `openaria.bridge.sdk` package
-and `openaria-bridge` command are not part of the current 0.5 product plan.
-
-## Safety model
-
-- The recording card is opened as read-only evidence and is never modified.
-- Every source artifact is checked against its manifest SHA-256 before use.
-- Device and publication schemas are vendored and hash-pinned.
-- Signed input requires an externally trusted device identity and key registry.
-- `--allow-unsigned` is an explicit degraded mode and is recorded as such.
-- Object-store credentials come from the process environment or workload
-  identity; the CLI does not load `.env` files.
-- Publication metadata is written last, so a failed legacy run cannot appear
-  complete. This fail-closed behavior does not promise continuation or recovery
-  after an interruption.
-
-## Requirements
-
-- Python 3.13 or newer
-- [uv](https://docs.astral.sh/uv/)
-- `ffmpeg` and `ffprobe` with H.264 support on `PATH`
-- an S3-compatible object store for publication runs
+Both modes produce the same local session-tree layout. Every manifest and
+artifact is checked against its declared byte count and SHA-256 before the
+completed directory becomes visible.
 
 ## Install and verify
+
+Requirements for the integrated export path are Python 3.13 or newer and
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync --locked
@@ -46,12 +25,114 @@ uv run pytest -q
 uv build
 ```
 
-The tests cover strict JSON parsing, schema and signature admission, read-only
-legacy-card handling, path safety, retained normalization behavior, real
-synthetic-FFmpeg integration, idempotent object publication, and wheel/sdist
-packaging. Passing these compatibility regressions is not a 0.5 release gate.
+The installed command is `openaria-bridge`. Inside this checkout, run it with
+`uv run openaria-bridge`.
 
-## Run a legacy compatibility import
+## LAN export
+
+The default command browses the local network, shows the discovered device and
+sealed sessions, then asks once before exporting all usable sessions:
+
+```bash
+uv run openaria-bridge
+```
+
+For unattended use, accept the export without a prompt:
+
+```bash
+uv run openaria-bridge --yes --output ./openaria-export
+```
+
+If multicast discovery is unavailable, provide the device directly. A bare IP
+uses Device API v4's default HTTP port 8080:
+
+```bash
+uv run openaria-bridge --endpoint 192.168.110.36 --yes
+```
+
+Use `--device DEVICE_ID_OR_LABEL` when more than one device is present, and
+repeat `--session SESSION_ID` to select specific sessions. A future authenticated
+Device API can receive its bearer token through `OPENARIA_DEVICE_TOKEN`; tokens
+are not accepted as command-line arguments.
+
+## Recording-card export
+
+Insert or mount the card and select card mode:
+
+```bash
+uv run openaria-bridge --mode card
+```
+
+Linux mount information, macOS `/Volumes`, and Windows drive roots are scanned.
+One detected card is selected automatically; multiple cards produce a numbered
+choice. The detected local path and session summary are shown before the export
+confirmation.
+
+An explicit path remains available for unusual mount layouts or automation:
+
+```bash
+uv run openaria-bridge \
+  --mode card \
+  --card /media/$USER/OPENARIA \
+  --output ./openaria-export \
+  --yes
+```
+
+`uv run main.py --mode card` and `uv run main.py --mode lan` route to the same
+integrated CLI for source-checkout compatibility.
+
+## Python API
+
+The stable import path is `openaria.bridge.sdk`. Discovery, source selection,
+session listing, download/copy, and integrity checks are all handled by one
+object:
+
+```python
+from openaria.bridge.sdk import OpenAriaSDK
+
+lan_result = OpenAriaSDK(mode="lan", output="./exports").export()
+card_result = OpenAriaSDK(mode="card", output="./exports").export()
+
+for session in lan_result.sessions:
+    print(session.session_id, session.path, session.total_bytes)
+```
+
+For a non-interactive program with multiple sources, pass `device=...`,
+`endpoint=...`, or `card=...`. `discover()` and `list_sessions()` expose the
+same immutable `Source` and `SessionInfo` values used by `export()`.
+
+## Output and integrity
+
+Exports are grouped by device label and session ID:
+
+```text
+openaria-export/
+  YLX-30D5872D/
+    SESSION_ID/
+      manifest.json
+      video/...
+      audio/...
+      imu/...
+      .openaria-export.json
+```
+
+The final receipt records the source mode and location, device identity,
+manifest digest, and every artifact's role, path, size, and SHA-256. A session
+is assembled in a private staging directory and published with one directory
+rename. A failed or mismatched download therefore does not appear as a complete
+export. Re-running against an already matching export verifies and reuses it.
+
+mDNS records are discovery candidates, not trusted device identities. The SDK
+accepts a LAN source only after its `/api/v4/device` response identifies a
+supported Device API v4 device with session-list, session-detail, and artifact
+download capability. Manifest response headers, exact manifest bytes, artifact
+ETags, content lengths, safe relative paths, and artifact SHA-256 values are
+then checked before publication.
+
+## Advanced compatibility pipeline
+
+The original normalization and S3-compatible publication pipeline remains in
+`main.py` for existing automation. Its invocation is unchanged:
 
 ```bash
 uv run main.py \
@@ -61,54 +142,17 @@ uv run main.py \
   --device-id DEVICE_ID
 ```
 
-Use `uv run main.py --help` for the complete option set. A local normalization
-run can stop before object-store publication:
+That advanced path additionally requires `ffmpeg`/`ffprobe` and object-store
+configuration through `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and
+`S3_REGION`. A local normalization run can still use `--skip-upload`, and the
+existing `main.py export-sbs` command remains available.
 
-```bash
-uv run main.py --card /mnt/recording-card --work ./work --skip-upload
-```
-
-Object-store configuration is supplied by environment:
-
-```text
-S3_ENDPOINT
-S3_ACCESS_KEY
-S3_SECRET_KEY
-S3_REGION
-```
-
-Do not place credentials in this repository or in command arguments. Use a
-shell environment, CI secret store, or workload identity appropriate for the
-deployment.
-
-## Output contract
-
-The normalizer emits separate left- and right-eye H.264 MP4 files using
-`yuv420p` and `faststart`. MJPEG sources use CRF 20 and H.264 sources use CRF
-18. An explicit 180-degree rotation is available for inverted rigs and becomes
-part of the normalization cache identity.
-
-Published objects use content-addressed evidence and a final Bucket Publication
-manifest. Re-running the same completed legacy input reuses matching normalized
-and uploaded objects instead of creating duplicate data. This ordinary retry
-behavior is not interrupted-operation recovery.
-
-The `vendor/` directory contains only the schemas, test vectors, and fixture
-corpora required by runtime validation and tests. `SOURCE.json` records the
-source snapshot and per-file hashes without requiring access to another
-repository.
-
-## Provenance
+## Provenance and license
 
 Query local build and artifact metadata with:
 
 ```bash
 uv run provenance.py --repository . --artifact dist/FILE
 ```
-
-This reports local reproducibility facts only; it does not claim that a card,
-signature, or object-store response is authentic evidence.
-
-## License
 
 See [LICENSE](LICENSE).
