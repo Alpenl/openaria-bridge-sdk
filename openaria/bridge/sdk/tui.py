@@ -18,12 +18,14 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
+    Checkbox,
     Footer,
     Header,
     Input,
     Label,
     LoadingIndicator,
     OptionList,
+    Select,
     SelectionList,
     Static,
 )
@@ -34,6 +36,7 @@ from textual.worker import get_current_worker
 from .client import OpenAriaSDK
 from .errors import OpenAriaError
 from .models import ExportResult, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 
 class SDKBackend(Protocol):
@@ -50,6 +53,7 @@ class SDKBackend(Protocol):
         session_ids: tuple[str, ...] | None = None,
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult: ...
 
 
@@ -133,6 +137,61 @@ class TextEntryDialog(ModalScreen[str | None]):
         self.dismiss(value)
 
 
+class ExportSettingsDialog(ModalScreen[ExportOptions | None]):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "cancel", "取消", show=False)
+    ]
+
+    def __init__(self, options: ExportOptions) -> None:
+        super().__init__()
+        self.options = options
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="entry-dialog"):
+            yield Label("导出设置")
+            yield Select(
+                [("H.264 · 常规成片", "h264"), ("H.265 · 较小归档，生成更慢", "hevc")],
+                value=self.options.video_codec,
+                allow_blank=False,
+                id="export-codec",
+            )
+            yield Label("音频延后 (ms)，仅用于已标定的会话；默认 0")
+            yield Input(
+                str(self.options.audio_calibration_seconds * 1000),
+                id="export-delay",
+                type="number",
+            )
+            yield Checkbox(
+                "保留原始视频和音频",
+                value=self.options.retain_sources,
+                id="export-retain",
+            )
+            yield Static("", id="entry-error")
+            with Horizontal(id="entry-actions"):
+                yield Button("取消", id="settings-cancel")
+                yield Button("应用", id="settings-apply", variant="primary")
+
+    @on(Button.Pressed, "#settings-cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#settings-apply")
+    def apply_settings(self) -> None:
+        try:
+            delay = float(self.query_one("#export-delay", Input).value)
+            if not -1000 <= delay <= 1000:
+                raise ValueError("音频补偿范围为 -1000 至 1000 ms")
+            options = ExportOptions(
+                video_codec=str(self.query_one("#export-codec", Select).value),
+                audio_calibration_seconds=delay / 1000,
+                retain_sources=self.query_one("#export-retain", Checkbox).value,
+            )
+        except (ValueError, OpenAriaError) as error:
+            self.query_one("#entry-error", Static).update(str(error))
+            return
+        self.dismiss(options)
+
+
 class OpenAriaTUI(App[None]):
     """Human-primary TUI that discovers both transport modes automatically."""
 
@@ -149,6 +208,7 @@ class OpenAriaTUI(App[None]):
         Binding("r", "rescan", "重新扫描"),
         Binding("a", "add_device", "手动连接"),
         Binding("o", "choose_output", "导出目录"),
+        Binding("p", "export_settings", "导出设置"),
         Binding("e", "export_selected", "导出", show=False),
     ]
 
@@ -161,6 +221,7 @@ class OpenAriaTUI(App[None]):
     ) -> None:
         super().__init__()
         self.export_root = default_output or Path.home() / "OpenAria Exports"
+        self.export_options = ExportOptions()
         self._sdk_factory = sdk_factory
         self._auto_scan = auto_scan
         self._generation = 0
@@ -195,6 +256,7 @@ class OpenAriaTUI(App[None]):
                     yield Static("成片保存到", id="destination-label")
                     yield Static("", id="destination-path")
                 yield Button("更改目录", id="change-output")
+                yield Button("导出设置", id="export-settings")
                 yield Button("请选择会话", variant="primary", id="export")
         yield Footer()
 
@@ -561,6 +623,21 @@ class OpenAriaTUI(App[None]):
     def export_button(self) -> None:
         self.action_export_selected()
 
+    @on(Button.Pressed, "#export-settings")
+    def action_export_settings(self) -> None:
+        if not self._exporting:
+            self.push_screen(
+                ExportSettingsDialog(self.export_options), self._settings_selected
+            )
+
+    def _settings_selected(self, options: ExportOptions | None) -> None:
+        if options is not None:
+            self.export_options = options
+            self.notify(
+                f"{options.video_codec.upper()} · 音频延后 {options.audio_calibration_seconds * 1000:g} ms · "
+                + ("保留源媒体" if options.retain_sources else "仅保存成片")
+            )
+
     def action_export_selected(self) -> None:
         if self._exporting or self._sessions_loading:
             return
@@ -615,6 +692,7 @@ class OpenAriaTUI(App[None]):
                 session_ids=session_ids,
                 output=self.export_root,
                 progress=progress,
+                options=self.export_options,
             )
             error = None
         except (OpenAriaError, OSError, ValueError) as caught:
@@ -693,6 +771,7 @@ class OpenAriaTUI(App[None]):
         self.query_one("#sessions", SelectionList).disabled = locked
         self.query_one("#connect", Button).disabled = locked
         self.query_one("#change-output", Button).disabled = self._exporting
+        self.query_one("#export-settings", Button).disabled = self._exporting
         self._render_export_button()
 
 

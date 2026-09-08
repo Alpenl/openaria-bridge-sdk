@@ -14,6 +14,7 @@ from ._lan import (
 )
 from .errors import DiscoveryError, ExportError, MultipleSourcesError
 from .models import ExportResult, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 
 class OpenAriaSDK:
@@ -163,6 +164,7 @@ class OpenAriaSDK:
         session_ids: Iterable[str] | None = None,
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Discover, verify, render, and atomically export finished recordings."""
 
@@ -205,7 +207,9 @@ class OpenAriaSDK:
             )
             for session in chosen:
                 exported.append(
-                    client.export_session(selected, session, output_root, progress)
+                    client.export_session(
+                        selected, session, output_root, progress, options
+                    )
                 )
         else:
             inventory = self._card_inventories.get(selected.location)
@@ -226,6 +230,7 @@ class OpenAriaSDK:
                         session,
                         output_root,
                         progress,
+                        options,
                     )
                 )
         return ExportResult(

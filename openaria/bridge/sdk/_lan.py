@@ -24,6 +24,7 @@ from ._export import (
 from ._json import load_json
 from .errors import ContractError, DiscoveryError, ExportError
 from .models import ExportedSession, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 SERVICE_TYPE = "_ylx-capture._tcp.local."
 DEFAULT_DEVICE_API_PORT = 8080
@@ -179,6 +180,7 @@ class DeviceApiClient:
         session: SessionInfo,
         output_root: Path,
         progress: Callable[[str], None] | None = None,
+        options: ExportOptions | None = None,
     ) -> ExportedSession:
         if not session.exportable:
             raise ExportError(
@@ -197,6 +199,7 @@ class DeviceApiClient:
             manifest_bytes=manifest_bytes,
             artifact_writer=write_artifact,
             progress=progress,
+            options=options,
         )
 
     def _manifest(self, session: SessionInfo) -> bytes:

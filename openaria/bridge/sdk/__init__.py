@@ -17,11 +17,13 @@ from .errors import (
     OpenAriaError,
 )
 from .models import ExportedSession, ExportResult, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 __all__ = [
     "ContractError",
     "DiscoveryError",
     "ExportError",
+    "ExportOptions",
     "ExportResult",
     "ExportedSession",
     "MultipleSourcesError",

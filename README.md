@@ -94,6 +94,33 @@ accepted as command-line arguments.
 
 ## Output and integrity
 
+Export settings are available in the terminal interface with **P / 导出设置**,
+and through the same API for LAN and card sources:
+
+```python
+from openaria.bridge.sdk import OpenAriaSDK, ExportOptions
+
+OpenAriaSDK(mode="lan", output="./archives").export(
+    session_ids=["YOUR_SESSION_ID"],
+    options=ExportOptions(
+        video_codec="hevc",          # H.265 Main/hvc1, medium/CRF 22
+        retain_sources=True,         # Keep exact MP4/WAV bytes and manifest
+        audio_calibration_seconds=0, # Positive values delay audio
+    ),
+)
+```
+
+The default remains H.264 veryfast/CRF 20, AAC 192 kb/s, and zero physical
+calibration. HEVC saves space at the cost of export time and requires a HEVC
+player. Sample-clock correction and measured video frame timestamps apply to
+both codecs. Physical calibration is explicit and recorded in the receipt;
+use a value measured for the selected sessions, not a value from another camera
+or setup. A changed codec, calibration, or retention option rebuilds the export
+atomically, keeping the previous verified directory as a hidden backup.
+With `retain_sources=True`, every original artifact remains under
+`.openaria/source`, verified by its original hash; no archive transcode is
+needed to preserve acquisition quality.
+
 LAN and recording-card sources produce the same user-facing result:
 
 ```text

@@ -135,6 +135,21 @@ Header {
     margin: 0 1;
 }
 
+#export-settings {
+    width: 12;
+    height: 3;
+    margin-right: 1;
+}
+
+ExportSettingsDialog #entry-dialog {
+    height: auto;
+    max-height: 95%;
+}
+
+Screen.-narrow #export-settings {
+    display: none;
+}
+
 #export {
     min-width: 27;
     width: auto;

@@ -15,6 +15,7 @@ import main as legacy
 from ._export import ArtifactDescriptor, export_session_tree
 from .errors import ContractError, DiscoveryError, ExportError
 from .models import ExportedSession, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,6 +69,7 @@ def export_card_session(
     session_info: SessionInfo,
     output_root: Path,
     progress: Callable[[str], None] | None = None,
+    options: ExportOptions | None = None,
 ) -> ExportedSession:
     session = next(
         (
@@ -120,6 +122,7 @@ def export_card_session(
         manifest_bytes=manifest_bytes,
         artifact_writer=write_artifact,
         progress=progress,
+        options=options,
     )
 
 

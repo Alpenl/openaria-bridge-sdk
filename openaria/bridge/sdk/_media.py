@@ -27,7 +27,7 @@ VIDEO_CRF = 20
 AUDIO_BITRATE = "192k"
 COMMAND_ERROR_LIMIT = 4000
 RENDERER_NAME = "openaria-ffmpeg-sbs"
-RENDERER_VERSION = 3
+RENDERER_VERSION = 5
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,6 +83,7 @@ class RenderedMedia:
     video_frame_count: int = 0
     output_fps: float = 0.0
     audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
+    audio_calibration_seconds: float = 0.0
 
 
 def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
@@ -283,10 +284,23 @@ def render_session_video(
     preset: str = VIDEO_PRESET,
     crf: int = VIDEO_CRF,
     audio_bitrate: str = AUDIO_BITRATE,
+    audio_calibration_seconds: float = 0.0,
+    video_codec: str = "h264",
 ) -> RenderedMedia:
     """Create and validate one playable SBS MP4 without exposing partial output."""
 
     plan = build_media_plan(session_root, manifest_bytes)
+    if not math.isfinite(audio_calibration_seconds):
+        raise ContractError("audio calibration must be finite")
+    if audio_calibration_seconds:
+        if plan.audio_start_time_seconds is None:
+            raise ContractError("audio calibration requires recorded audio")
+        plan = dataclasses.replace(
+            plan,
+            audio_start_time_seconds=(
+                plan.audio_start_time_seconds + audio_calibration_seconds
+            ),
+        )
     source_frames, _ = _measure_video(plan)
     if (
         plan.indexed_frame_count is not None
@@ -317,6 +331,7 @@ def render_session_video(
             preset=preset,
             crf=crf,
             audio_bitrate=audio_bitrate,
+            video_codec=video_codec,
         )
         _run(
             [executable, *arguments],
@@ -358,6 +373,7 @@ def render_session_video(
         video_frame_count=output_frames,
         output_fps=plan.output_fps,
         audio_clock=plan.audio_clock,
+        audio_calibration_seconds=audio_calibration_seconds,
     )
 
 
@@ -369,9 +385,12 @@ def build_ffmpeg_arguments(
     preset: str = VIDEO_PRESET,
     crf: int = VIDEO_CRF,
     audio_bitrate: str = AUDIO_BITRATE,
+    video_codec: str = "h264",
 ) -> list[str]:
     """Build one deterministic FFmpeg command for tests and execution."""
 
+    if video_codec not in {"h264", "hevc"}:
+        raise ContractError("video_codec must be h264 or hevc")
     workdir.mkdir(parents=True, exist_ok=True)
     arguments = [
         "-hide_banner",
@@ -441,19 +460,36 @@ def build_ffmpeg_arguments(
             "-map_metadata",
             "-1",
             "-c:v",
-            "libx264",
+            "libx265" if video_codec == "hevc" else "libx264",
             "-profile:v",
-            "high",
+            "main" if video_codec == "hevc" else "high",
             "-preset",
             preset,
             "-crf",
             str(crf),
             "-pix_fmt",
             "yuv420p",
+            "-color_primaries",
+            "2",
+            "-color_trc",
+            "2",
+            "-colorspace",
+            "2",
+            "-color_range",
+            "tv",
             "-metadata:s:v:0",
             "stereo_mode=left_right",
         ]
     )
+    if video_codec == "hevc":
+        arguments.extend(
+            [
+                "-tag:v",
+                "hvc1",
+                "-x265-params",
+                "pools=4:frame-threads=2:log-level=error",
+            ]
+        )
     if plan.frame_pts_us:
         end_us = plan.frame_pts_us[-1] + round(1_000_000 / plan.output_fps)
         arguments.extend(
@@ -468,8 +504,13 @@ def build_ffmpeg_arguments(
                 "1000000",
                 "-bf",
                 "0",
-                "-x264-params",
-                f"fps={_frame_rate(plan.output_fps)}",
+                "-x265-params" if video_codec == "hevc" else "-x264-params",
+                f"fps={_frame_rate(plan.output_fps)}"
+                + (
+                    ":pools=4:frame-threads=2:log-level=error"
+                    if video_codec == "hevc"
+                    else ""
+                ),
                 "-bsf:v",
                 (
                     "setts=pts=PTS:dts=DTS:duration='"
@@ -506,16 +547,31 @@ def _audio_filter(plan: MediaPlan, input_index: int) -> str:
     offset = plan.audio_offset_seconds
     if offset is None:
         raise ContractError("audio media plan omitted its timeline offset")
-    chain = f"[{input_index}:a:0]aresample=async=1:first_pts=0"
+    chain = f"[{input_index}:a:0]aresample=async=0:first_pts=0"
     if abs(plan.audio_tempo - 1.0) > 1e-9:
-        chain += f",atempo={_decimal(plan.audio_tempo)}"
-    if offset < -0.0005:
+        rate = plan.audio_sample_rate
+        if rate is None or rate <= 0:
+            raise ContractError("audio sample clock requires a positive sample rate")
+        actual_rate = rate * plan.audio_tempo
+        if not math.isfinite(actual_rate) or actual_rate <= 0:
+            raise ContractError("invalid audio sample clock rate")
+        scale = min(1000, int((2**31 - 1) / max(rate, actual_rate)))
+        if scale < 1:
+            raise ContractError("audio sample clock rate exceeds FFmpeg limits")
+        # Virtual rates retain millihertz precision without WSOLA moving transients.
+        chain += (
+            f",asetrate={round(actual_rate * scale)},aresample={rate * scale}"
+            f",asetrate={rate}"
+        )
+    if offset < 0:
         chain += f",atrim=start={_decimal(-offset)},asetpts=PTS-STARTPTS"
     else:
         chain += ",asetpts=PTS-STARTPTS"
-        if offset > 0.0005:
-            delay_ms = max(1, round(offset * 1000))
-            chain += f",adelay={delay_ms}:all=1"
+        if offset > 0:
+            rate = plan.audio_sample_rate
+            if rate is None or rate <= 0:
+                raise ContractError("audio delay requires a positive sample rate")
+            chain += f",adelay={round(offset * rate)}S:all=1"
     if plan.video_duration_seconds <= 0:
         raise ContractError("media plan video duration must be positive")
     duration = _decimal(plan.video_duration_seconds)

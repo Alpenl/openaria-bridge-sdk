@@ -49,6 +49,7 @@ def _stub_final_media_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
         manifest_bytes: bytes,
         output: Path,
         progress=None,
+        **options,
     ) -> RenderedMedia:
         payload = b"synthetic-final-mp4"
         output.write_bytes(payload)
@@ -67,6 +68,29 @@ def _stub_final_media_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(export_module, "render_session_video", render)
+
+
+def test_export_options_bind_cache_and_preserve_verified_sources(
+    tmp_path: Path,
+) -> None:
+    from openaria.bridge.sdk import ExportOptions
+
+    card = tmp_path / "card"
+    _, payloads, _ = _build_card(card)
+    sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
+    options = ExportOptions(video_codec="hevc", retain_sources=True)
+    first = sdk.export(options=options).sessions[0]
+    source = first.path / ".openaria/source"
+    for relative, payload in payloads.items():
+        assert (source / relative).read_bytes() == payload
+    receipt = json.loads((first.path / ".openaria/media.json").read_text())
+    assert receipt["output"]["video_codec"] == "hevc"
+    assert receipt["cleanup"]["removed_paths"] == []
+    assert sdk.export(options=options).sessions[0].reused
+    rebuilt = sdk.export().sessions[0]
+    assert not rebuilt.reused
+    assert sdk.export().sessions[0].reused
+    assert list(first.path.parent.glob(f".{SESSION_ID}.previous-*"))
 
 
 def test_card_mode_discovers_mount_and_exports_same_verified_tree(
@@ -124,7 +148,7 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
     (destination / ".openaria" / "media.json").write_text(json.dumps(media))
     assert sdk.export(source=sources[0]).sessions[0].reused is False
     rebuilt = json.loads((destination / ".openaria" / "media.json").read_text())
-    assert rebuilt["renderer"]["version"] == 3
+    assert rebuilt["renderer"]["version"] == 5
     assert list(destination.parent.glob(f".{SESSION_ID}.previous-*"))
 
 

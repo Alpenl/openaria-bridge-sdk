@@ -105,6 +105,7 @@ class FakeSDK:
         session_ids: tuple[str, ...] | None = None,
         output: Path | str | None = None,
         progress=None,
+        options=None,
     ) -> ExportResult:
         assert source is not None
         assert session_ids is not None

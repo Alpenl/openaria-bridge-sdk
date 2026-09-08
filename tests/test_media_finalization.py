@@ -50,9 +50,11 @@ def _indexed_manifest(root: Path, timestamps_ns: list[int]) -> dict[str, object]
         [0] * 4 + [300_000_000] * 4,
     ],
 )
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
 def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     tmp_path: Path,
     offsets: list[int],
+    codec: str,
 ) -> None:
     for eye in ("left", "right"):
         for index in range(2):
@@ -65,7 +67,9 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     manifest = _indexed_manifest(tmp_path, timestamps)
     output = tmp_path / "recording.mp4"
 
-    rendered = render_session_video(tmp_path, json.dumps(manifest).encode(), output)
+    rendered = render_session_video(
+        tmp_path, json.dumps(manifest).encode(), output, video_codec=codec
+    )
 
     frames, duration = imageio_ffmpeg.count_frames_and_secs(str(output))
     assert frames == rendered.video_frame_count == 8
@@ -94,6 +98,7 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
         [(timestamp - timestamps[0]) / 1_000_000_000 for timestamp in timestamps],
         abs=0.00001,
     )
+    assert (b"hvc1" if codec == "hevc" else b"avc1") in output.read_bytes()
 
 
 def test_legacy_export_sbs_v2_uses_the_same_capture_clock(tmp_path: Path) -> None:
@@ -432,7 +437,7 @@ def test_media_plan_delays_audio_that_started_after_video(tmp_path: Path) -> Non
     )
 
     filters = arguments[arguments.index("-filter_complex") + 1]
-    assert "adelay=200:all=1" in filters
+    assert "adelay=9600S:all=1" in filters
     assert "apad=whole_dur=1,atrim=end=1[audio]" in filters
 
 
@@ -449,3 +454,59 @@ def test_real_device_manifest_uses_audio_sync_clock_for_alignment() -> None:
     assert plan.video_start_time_seconds == 0.98904022
     assert plan.audio_start_time_seconds == 0.973346574
     assert plan.audio_offset_seconds == -0.015693646000000006
+
+
+@pytest.mark.parametrize("tempo", [48004.615414 / 48000, 47995.384586 / 48000])
+@pytest.mark.parametrize("offset", [-0.087886907, 0.1234567])
+def test_sample_clock_resampling_preserves_transient_positions(
+    tmp_path: Path, tempo: float, offset: float
+) -> None:
+    import numpy as np
+
+    from openaria.bridge.sdk._media import _audio_filter
+
+    rate = 48_000
+    source = np.zeros(34 * rate, dtype="<f4")
+    indices = [round(t * rate) for t in (0.513, 3.127, 10.543, 19.388, 31.529)]
+    source[indices] = 0.9
+    raw = tmp_path / "source.f32"
+    raw.write_bytes(source.tobytes())
+    plan = MediaPlan(
+        mode="split",
+        audio_segments=(raw,),
+        audio_start_time_seconds=offset,
+        audio_sample_rate=rate,
+        audio_tempo=tempo,
+        video_duration_seconds=34,
+    )
+    rendered = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-v",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            str(rate),
+            "-ac",
+            "1",
+            "-i",
+            str(raw),
+            "-filter_complex",
+            _audio_filter(plan, 0),
+            "-map",
+            "[audio]",
+            "-f",
+            "f32le",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    output = np.frombuffer(rendered.stdout, dtype="<f4")
+    for index in indices:
+        expected = round(index / tempo + offset * rate)
+        lo, hi = expected - 2400, expected + 2400
+        actual = lo + int(np.argmax(abs(output[lo:hi])))
+        assert abs(actual - expected) <= 1
+        assert abs(output[actual]) > 0.3

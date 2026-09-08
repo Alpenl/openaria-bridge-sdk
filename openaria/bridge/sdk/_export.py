@@ -25,6 +25,7 @@ from ._media import (
 )
 from .errors import ContractError, ExportError
 from .models import ExportedSession, SessionInfo, Source
+from .options import ExportOptions
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
@@ -214,9 +215,11 @@ def export_session_tree(
     manifest_bytes: bytes,
     artifact_writer: Callable[[ArtifactDescriptor, Path], None],
     progress: Callable[[str], None] | None = None,
+    options: ExportOptions | None = None,
 ) -> ExportedSession:
     """Verify source bytes, render final media, and publish with one directory rename."""
 
+    options = options or ExportOptions()
     safe_segment(manifest_name, "manifest filename")
     session_id = safe_segment(session.session_id, "session_id")
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
@@ -251,6 +254,7 @@ def export_session_tree(
             len(manifest_bytes),
             manifest_sha256,
             artifacts,
+            options=options,
         )
         if existing_media_bytes is not None:
             _remove_legacy_source_tree(final_directory, manifest_name, artifacts)
@@ -285,6 +289,7 @@ def export_session_tree(
                 artifact_writer=artifact_writer,
                 progress=progress,
                 final_directory=final_directory,
+                options=options,
             )
         if _legacy_export_matches(
             final_directory,
@@ -303,6 +308,7 @@ def export_session_tree(
                 manifest_sha256=manifest_sha256,
                 artifacts=artifacts,
                 progress=progress,
+                options=options,
             )
             return ExportedSession(
                 session_id=session_id,
@@ -349,9 +355,14 @@ def export_session_tree(
             manifest_bytes,
             staging / FINAL_MEDIA_NAME,
             lambda message: _emit(progress, f"{session_id}: {message}"),
+            **options.render_arguments(),
         )
-        removed_media = _remove_media_inputs(
-            source_tree, _cleanup_artifacts(artifacts, rendered)
+        removed_media = (
+            ()
+            if options.retain_sources
+            else _remove_media_inputs(
+                source_tree, _cleanup_artifacts(artifacts, rendered)
+            )
         )
         _emit(progress, f"{session_id}: 已清理 {len(removed_media)} 个源媒体分片")
         _write_json(
@@ -362,6 +373,7 @@ def export_session_tree(
                 rendered,
                 artifacts,
                 removed_media,
+                options,
             ),
         )
         staging.rename(final_directory)
@@ -388,6 +400,7 @@ def _existing_export_matches(
     artifacts: tuple[ArtifactDescriptor, ...],
     *,
     allow_legacy_renderer: bool = False,
+    options: ExportOptions | None = None,
 ) -> int | None:
     internal = directory / INTERNAL_DIRECTORY
     source_tree = internal / SOURCE_DIRECTORY
@@ -440,12 +453,22 @@ def _existing_export_matches(
     ):
         return None
     cleanup = media_receipt.get("cleanup")
+    recorded_options = media_receipt.get("options", dataclasses.asdict(ExportOptions()))
+    try:
+        previous_options = ExportOptions(**recorded_options)
+    except (TypeError, ValueError, ContractError):
+        return None
+    if not allow_legacy_renderer and previous_options != (options or ExportOptions()):
+        return None
     unknown_audio = (
         media_receipt.get("timeline", {}).get("audio_clock", {}).get("continuity")
         == "unknown"
     )
     removed = [
-        a.path for a in media_artifacts if not (unknown_audio and a.role == "audio.wav")
+        a.path
+        for a in media_artifacts
+        if not previous_options.retain_sources
+        and not (unknown_audio and a.role == "audio.wav")
     ]
     if cleanup != {"status": "complete", "removed_paths": removed}:
         return None
@@ -537,7 +560,9 @@ def _upgrade_legacy_export(
     manifest_sha256: str,
     artifacts: tuple[ArtifactDescriptor, ...],
     progress: Callable[[str], None] | None,
+    options: ExportOptions | None = None,
 ) -> RenderedMedia:
+    options = options or ExportOptions()
     temporary_internal = directory / f"{INTERNAL_DIRECTORY}.upgrade.part"
     final_internal = directory / INTERNAL_DIRECTORY
     output = directory / FINAL_MEDIA_NAME
@@ -551,6 +576,7 @@ def _upgrade_legacy_export(
             manifest_bytes,
             output,
             lambda message: _emit(progress, f"{session_id}: {message}"),
+            **options.render_arguments(),
         )
         source_tree = temporary_internal / SOURCE_DIRECTORY
         source_tree.mkdir(parents=True)
@@ -570,8 +596,12 @@ def _upgrade_legacy_export(
                 artifacts=artifacts,
             ),
         )
-        removed_media = _remove_media_inputs(
-            source_tree, _cleanup_artifacts(artifacts, rendered)
+        removed_media = (
+            ()
+            if options.retain_sources
+            else _remove_media_inputs(
+                source_tree, _cleanup_artifacts(artifacts, rendered)
+            )
         )
         _write_json(
             temporary_internal / MEDIA_RECEIPT,
@@ -581,6 +611,7 @@ def _upgrade_legacy_export(
                 rendered,
                 artifacts,
                 removed_media,
+                options,
             ),
         )
         temporary_internal.rename(final_internal)
@@ -742,13 +773,16 @@ def _media_receipt(
     rendered: RenderedMedia,
     artifacts: tuple[ArtifactDescriptor, ...],
     removed_media: tuple[str, ...],
+    options: ExportOptions | None = None,
 ) -> dict[str, Any]:
+    options = options or ExportOptions()
     return {
         "schema": "openaria.media-export.v1",
         "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "session_id": session_id,
         "source_manifest_sha256": manifest_sha256,
         "renderer": {"name": RENDERER_NAME, "version": RENDERER_VERSION},
+        "options": dataclasses.asdict(options),
         "layout": "side-by-side",
         "inputs": _media_input_records(artifacts),
         "cleanup": {
@@ -763,6 +797,7 @@ def _media_receipt(
             "video_start_time_seconds": rendered.video_start_time_seconds,
             "audio_start_time_seconds": rendered.audio_start_time_seconds,
             "audio_offset_seconds": rendered.audio_offset_seconds,
+            "audio_calibration_seconds": rendered.audio_calibration_seconds,
         },
         "segments": {
             "video": rendered.video_segment_count,
@@ -775,7 +810,7 @@ def _media_receipt(
             "bytes": rendered.size_bytes,
             "sha256": rendered.sha256,
             "container": "mp4",
-            "video_codec": "h264",
+            "video_codec": options.video_codec,
             "audio_codec": "aac" if rendered.has_audio else None,
         },
     }
