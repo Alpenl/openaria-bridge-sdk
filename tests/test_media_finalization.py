@@ -42,14 +42,26 @@ def _indexed_manifest(root: Path, timestamps_ns: list[int]) -> dict[str, object]
     return manifest
 
 
+@pytest.mark.parametrize(
+    "offsets",
+    [
+        [0] * 8,
+        [0, 5_000_000, -4_000_000, 9_000_000, 0, -2_000_000, 3_000_000, 0],
+        [0] * 4 + [300_000_000] * 4,
+    ],
+)
 def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     tmp_path: Path,
+    offsets: list[int],
 ) -> None:
     for eye in ("left", "right"):
         for index in range(2):
             _video(tmp_path / "video" / f"{eye}_{index:05d}.mp4", "red")
     interval_ns = 125_123_456
-    timestamps = [1_000_000_000 + index * interval_ns for index in range(8)]
+    timestamps = [
+        1_000_000_000 + index * interval_ns + offsets[index] for index in range(8)
+    ]
+    interval_ns = (timestamps[-1] - timestamps[0]) / 7
     manifest = _indexed_manifest(tmp_path, timestamps)
     output = tmp_path / "recording.mp4"
 
@@ -79,7 +91,8 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
         float(value) for value in re.findall(r"pts_time:([\d.e+-]+)", decoded.stderr)
     ]
     assert pts == pytest.approx(
-        [index * interval_ns / 1_000_000_000 for index in range(8)], abs=0.00001
+        [(timestamp - timestamps[0]) / 1_000_000_000 for timestamp in timestamps],
+        abs=0.00001,
     )
 
 
@@ -117,16 +130,13 @@ def test_legacy_export_sbs_v2_uses_the_same_capture_clock(tmp_path: Path) -> Non
     assert duration == pytest.approx(8 * interval / 1e9, abs=0.01)
 
 
-@pytest.mark.parametrize("fault", ["gap", "reversed", "count", "identity"])
+@pytest.mark.parametrize("fault", ["submicrosecond", "reversed", "count", "identity"])
 def test_invalid_capture_clock_is_rejected_before_rendering(
     tmp_path: Path, fault: str
 ) -> None:
     timestamps = [1_000_000_000 + index * 100_000_000 for index in range(8)]
-    if fault == "gap":
-        timestamps = [
-            timestamp + (300_000_000 if index >= 4 else 0)
-            for index, timestamp in enumerate(timestamps)
-        ]
+    if fault == "submicrosecond":
+        timestamps[3] = timestamps[2] + 100
     if fault == "reversed":
         timestamps[3] = timestamps[2]
     manifest = _indexed_manifest(tmp_path, timestamps)

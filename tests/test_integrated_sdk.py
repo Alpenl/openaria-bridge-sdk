@@ -124,7 +124,7 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
     (destination / ".openaria" / "media.json").write_text(json.dumps(media))
     assert sdk.export(source=sources[0]).sessions[0].reused is False
     rebuilt = json.loads((destination / ".openaria" / "media.json").read_text())
-    assert rebuilt["renderer"]["version"] == 2
+    assert rebuilt["renderer"]["version"] == 3
     assert list(destination.parent.glob(f".{SESSION_ID}.previous-*"))
 
 

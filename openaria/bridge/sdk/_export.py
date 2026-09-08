@@ -431,7 +431,9 @@ def _existing_export_matches(
         not in [
             {"name": RENDERER_NAME, "version": version}
             for version in (
-                [1, RENDERER_VERSION] if allow_legacy_renderer else [RENDERER_VERSION]
+                list(range(1, RENDERER_VERSION + 1))
+                if allow_legacy_renderer
+                else [RENDERER_VERSION]
             )
         ]
         or media_receipt.get("inputs") != _media_input_records(artifacts)
