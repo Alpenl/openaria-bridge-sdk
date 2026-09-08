@@ -3,10 +3,12 @@ from __future__ import annotations
 import array
 import json
 import math
+import re
 import subprocess
 from pathlib import Path
 
 import imageio_ffmpeg
+import pytest
 from PIL import Image
 
 from openaria.bridge.sdk._media import (
@@ -15,6 +17,125 @@ from openaria.bridge.sdk._media import (
     build_media_plan,
     render_session_video,
 )
+from openaria.bridge.sdk.errors import ContractError, ExportError
+
+
+def _indexed_manifest(root: Path, timestamps_ns: list[int]) -> dict[str, object]:
+    manifest = _multi_segment_manifest()
+    manifest.pop("audio")
+    manifest["camera"] = {"nominal_fps": 10, "effective_fps": 7.9}
+    path = root / "frames.ndjson"
+    rows = [
+        {
+            "schema": "ylx.frame-index.v1",
+            "session_id": "test-session",
+            "frame": index,
+            "host_monotonic_ns": timestamp,
+        }
+        for index, timestamp in enumerate(timestamps_ns)
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest["frames"] = {
+        "count": len(rows),
+        "artifact": _artifact("frames.ndjson", "frames.index", "application/x-ndjson"),
+    }
+    return manifest
+
+
+def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
+    tmp_path: Path,
+) -> None:
+    for eye in ("left", "right"):
+        for index in range(2):
+            _video(tmp_path / "video" / f"{eye}_{index:05d}.mp4", "red")
+    interval_ns = 125_123_456
+    timestamps = [1_000_000_000 + index * interval_ns for index in range(8)]
+    manifest = _indexed_manifest(tmp_path, timestamps)
+    output = tmp_path / "recording.mp4"
+
+    rendered = render_session_video(tmp_path, json.dumps(manifest).encode(), output)
+
+    frames, duration = imageio_ffmpeg.count_frames_and_secs(str(output))
+    assert frames == rendered.video_frame_count == 8
+    assert rendered.output_fps == pytest.approx(1_000_000_000 / interval_ns)
+    assert duration == pytest.approx(8 * interval_ns / 1_000_000_000, abs=0.01)
+    decoded = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-i",
+            str(output),
+            "-vf",
+            "showinfo",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pts = [
+        float(value) for value in re.findall(r"pts_time:([\d.e+-]+)", decoded.stderr)
+    ]
+    assert pts == pytest.approx(
+        [index * interval_ns / 1_000_000_000 for index in range(8)], abs=0.00001
+    )
+
+
+def test_legacy_export_sbs_v2_uses_the_same_capture_clock(tmp_path: Path) -> None:
+    import main
+
+    for eye in ("left", "right"):
+        for index in range(2):
+            _video(tmp_path / "video" / f"{eye}_{index:05d}.mp4", "red")
+    interval = 125_123_456
+    manifest = _indexed_manifest(
+        tmp_path, [1_000_000_000 + i * interval for i in range(8)]
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    session = main.Session(
+        directory=tmp_path,
+        source_directory_name="test-session",
+        session_id="test-session",
+        captured_at="2026-09-08T00:00:00Z",
+        duration_seconds=2.0,
+        artifacts=(),
+        camera={},
+        source_manifest_path=manifest_path,
+        source_manifest_sha256="unused",
+        source_manifest_revision="unused",
+        source_signature={},
+        source_manifest_schema=main.DEVICE_SESSION_V2_SCHEMA,
+    )
+    output = main.export_sbs(
+        session, tmp_path / "legacy-command.mp4", verify_inputs=False, crf=20
+    )
+    frames, duration = imageio_ffmpeg.count_frames_and_secs(str(output))
+    assert frames == 8
+    assert duration == pytest.approx(8 * interval / 1e9, abs=0.01)
+
+
+@pytest.mark.parametrize("fault", ["gap", "reversed", "count", "identity"])
+def test_invalid_capture_clock_is_rejected_before_rendering(
+    tmp_path: Path, fault: str
+) -> None:
+    timestamps = [1_000_000_000 + index * 100_000_000 for index in range(8)]
+    if fault == "gap":
+        timestamps = [
+            timestamp + (300_000_000 if index >= 4 else 0)
+            for index, timestamp in enumerate(timestamps)
+        ]
+    if fault == "reversed":
+        timestamps[3] = timestamps[2]
+    manifest = _indexed_manifest(tmp_path, timestamps)
+    if fault == "count":
+        manifest["frames"]["count"] = 9
+    if fault == "identity":
+        manifest["session_id"] = "another-session"
+    with pytest.raises((ContractError, ExportError)):
+        build_media_plan(tmp_path, json.dumps(manifest).encode())
 
 
 def _run_ffmpeg(*arguments: str) -> None:
@@ -131,6 +252,8 @@ def _multi_segment_manifest() -> dict[str, object]:
                 "index": index,
                 "start_sample": index * 24_000,
                 "end_sample": (index + 1) * 24_000,
+                "pcm_payload_bytes": 96000,
+                "wav_header_bytes": 44,
                 "start_time_seconds": start,
                 "end_time_seconds": end,
                 "artifact": _artifact(
@@ -138,9 +261,12 @@ def _multi_segment_manifest() -> dict[str, object]:
                 ),
             }
         )
+    for segment in audio_segments:
+        segment["artifact"]["bytes"] = 96044
     return {
         "schema": "ylx.device-session.v2",
         "session_id": "test-session",
+        "time": {"duration_seconds": 2.0},
         "camera": {"effective_fps": 10},
         "video": {
             "layout": "split-eyes",
@@ -151,6 +277,7 @@ def _multi_segment_manifest() -> dict[str, object]:
         "audio": {
             "state": "recorded",
             "sample_rate": 48_000,
+            "sample_count": 48_000,
             "channels": 2,
             "sync": {
                 "time_base": "host_monotonic",

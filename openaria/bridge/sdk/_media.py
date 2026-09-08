@@ -9,12 +9,14 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
+from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import imageio_ffmpeg
 
+from ._audio_clock import audio_clock_report
 from ._json import load_json
 from .errors import ContractError, ExportError
 
@@ -24,7 +26,7 @@ VIDEO_CRF = 20
 AUDIO_BITRATE = "192k"
 COMMAND_ERROR_LIMIT = 4000
 RENDERER_NAME = "openaria-ffmpeg-sbs"
-RENDERER_VERSION = 1
+RENDERER_VERSION = 2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +44,9 @@ class MediaPlan:
     audio_sample_rate: int | None = None
     raw_mjpeg_fps: float | None = None
     output_fps: float = 0.0
+    indexed_frame_count: int | None = None
+    audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
+    audio_tempo: float = 1.0
 
     @property
     def has_audio(self) -> bool:
@@ -75,6 +80,7 @@ class RenderedMedia:
     audio_offset_seconds: float | None
     video_frame_count: int = 0
     output_fps: float = 0.0
+    audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
@@ -149,11 +155,25 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
     else:
         raise ContractError(f"unsupported Device Session video layout: {layout!r}")
 
+    indexed_frame_count: int | None = None
+    if mode == "split" and manifest.get("frames") is not None:
+        output_fps, indexed_frame_count = _frame_clock(session_root, manifest)
+
     audio_paths: tuple[Path, ...] = ()
     audio_start: float | None = None
     sample_rate: int | None = None
     audio = manifest.get("audio")
+    clock_report: dict[str, Any] = {"continuity": "no-audio"}
+    audio_tempo = 1.0
     if isinstance(audio, dict) and audio.get("state") == "recorded":
+        try:
+            clock_report = audio_clock_report(
+                audio, manifest["time"]["duration_seconds"]
+            )
+        except (ValueError, TypeError, KeyError) as error:
+            raise ContractError(f"invalid audio clock: {error}") from error
+        if clock_report["continuity"] == "verified":
+            audio_tempo = clock_report["actual_sample_rate"] / audio["sample_rate"]
         audio_segments = _ordered_segments(audio.get("segments"), "audio")
         audio_paths = tuple(
             _artifact_path(
@@ -188,7 +208,49 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
         audio_sample_rate=sample_rate,
         raw_mjpeg_fps=raw_fps,
         output_fps=output_fps,
+        indexed_frame_count=indexed_frame_count,
+        audio_clock=clock_report,
+        audio_tempo=audio_tempo,
     )
+
+
+def _frame_clock(session_root: Path, manifest: dict[str, Any]) -> tuple[float, int]:
+    frames = _object(manifest.get("frames"), "manifest frames")
+    expected = _positive_integer(frames.get("count"), "manifest frames count")
+    path = _artifact_path(session_root, frames.get("artifact"), "frame index artifact")
+    if path.is_symlink() or not path.is_file():
+        raise ExportError(f"verified frame index disappeared: {path}")
+    timestamps: list[int] = []
+    with path.open("rb") as handle:
+        for index, line in enumerate(handle):
+            row = _object(load_json(line, "frame index row"), "frame index row")
+            if (
+                row.get("schema") != "ylx.frame-index.v1"
+                or row.get("session_id") != manifest.get("session_id")
+                or isinstance(row.get("frame"), bool)
+                or row.get("frame") != index
+            ):
+                raise ContractError("frame index identity or frame sequence is invalid")
+            timestamp = _positive_integer(
+                row.get("host_monotonic_ns"), "frame index host_monotonic_ns"
+            )
+            if timestamps and timestamp <= timestamps[-1]:
+                raise ContractError("frame index clock must be strictly increasing")
+            timestamps.append(timestamp)
+    if len(timestamps) != expected or expected < 2:
+        raise ContractError(
+            "frame index count does not provide a complete capture clock"
+        )
+
+    # Camera effective_fps includes shutdown time; only frame timestamps measure cadence.
+    interval_ns = (timestamps[-1] - timestamps[0]) / (expected - 1)
+    for index, timestamp in enumerate(timestamps):
+        if abs((timestamp - timestamps[0]) - index * interval_ns) > interval_ns / 2:
+            raise ExportError(
+                "frame clock cannot be represented at constant rate within half a frame; "
+                "preserve the source for variable-rate rendering"
+            )
+    return 1_000_000_000 / interval_ns, expected
 
 
 def render_session_video(
@@ -196,11 +258,20 @@ def render_session_video(
     manifest_bytes: bytes,
     output: Path,
     progress: Callable[[str], None] | None = None,
+    *,
+    preset: str = VIDEO_PRESET,
+    crf: int = VIDEO_CRF,
+    audio_bitrate: str = AUDIO_BITRATE,
 ) -> RenderedMedia:
     """Create and validate one playable SBS MP4 without exposing partial output."""
 
     plan = build_media_plan(session_root, manifest_bytes)
     source_frames, _ = _measure_video(plan)
+    if (
+        plan.indexed_frame_count is not None
+        and source_frames != plan.indexed_frame_count
+    ):
+        raise ExportError("source video frame count differs from its capture clock")
     source_duration = source_frames / plan.output_fps
     plan = dataclasses.replace(plan, video_duration_seconds=source_duration)
     if output.exists() or output.is_symlink():
@@ -222,6 +293,9 @@ def render_session_video(
             plan,
             workdir=workdir,
             output=staged_output,
+            preset=preset,
+            crf=crf,
+            audio_bitrate=audio_bitrate,
         )
         _run(
             [executable, *arguments],
@@ -255,6 +329,7 @@ def render_session_video(
         audio_offset_seconds=plan.audio_offset_seconds,
         video_frame_count=output_frames,
         output_fps=plan.output_fps,
+        audio_clock=plan.audio_clock,
     )
 
 
@@ -263,6 +338,9 @@ def build_ffmpeg_arguments(
     *,
     workdir: Path,
     output: Path,
+    preset: str = VIDEO_PRESET,
+    crf: int = VIDEO_CRF,
+    audio_bitrate: str = AUDIO_BITRATE,
 ) -> list[str]:
     """Build one deterministic FFmpeg command for tests and execution."""
 
@@ -281,8 +359,8 @@ def build_ffmpeg_arguments(
         arguments.extend(_concat_input(plan.left_segments, workdir, "left"))
         arguments.extend(_concat_input(plan.right_segments, workdir, "right"))
         filters.append(
-            "[0:v:0]setpts=PTS-STARTPTS[left];"
-            "[1:v:0]setpts=PTS-STARTPTS[right];"
+            f"[0:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[left];"
+            f"[1:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[right];"
             "[left][right]hstack=inputs=2[video]"
         )
         video_map = "[video]"
@@ -329,13 +407,13 @@ def build_ffmpeg_arguments(
             "-profile:v",
             "high",
             "-preset",
-            VIDEO_PRESET,
+            preset,
             "-crf",
-            str(VIDEO_CRF),
+            str(crf),
             "-pix_fmt",
             "yuv420p",
             "-r",
-            _decimal(plan.output_fps),
+            _frame_rate(plan.output_fps),
             "-fps_mode",
             "cfr",
             "-metadata:s:v:0",
@@ -348,7 +426,7 @@ def build_ffmpeg_arguments(
                 "-c:a",
                 "aac",
                 "-b:a",
-                AUDIO_BITRATE,
+                audio_bitrate,
             ]
         )
     arguments.extend(
@@ -370,6 +448,8 @@ def _audio_filter(plan: MediaPlan, input_index: int) -> str:
     if offset is None:
         raise ContractError("audio media plan omitted its timeline offset")
     chain = f"[{input_index}:a:0]aresample=async=1:first_pts=0"
+    if abs(plan.audio_tempo - 1.0) > 1e-9:
+        chain += f",atempo={_decimal(plan.audio_tempo)}"
     if offset < -0.0005:
         chain += f",atrim=start={_decimal(-offset)},asetpts=PTS-STARTPTS"
     else:
@@ -593,6 +673,10 @@ def _sha256_file(path: Path) -> str:
 
 def _decimal(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
+
+
+def _frame_rate(value: float) -> str:
+    return str(Fraction(value).limit_denominator(1_000_000))
 
 
 def _emit(progress: Callable[[str], None] | None, message: str) -> None:

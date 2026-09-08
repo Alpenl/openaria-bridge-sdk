@@ -368,11 +368,16 @@ def _device_session_v1_validator() -> Draft202012Validator:
 
 @lru_cache
 def _device_session_v2_validator() -> Draft202012Validator:
+    schema = _pinned_ylx_schema(
+        "ylx-device-session-v2.schema.json", YLX_DEVICE_SESSION_V2_SCHEMA_SHA256,
+    )
+    # Conductor's versioned clock extension does not modify the frozen vendor pin.
+    schema["$defs"]["recordedAudio"]["properties"]["capture_clock"] = {
+        "type": "object", "required": ["schema"],
+        "properties": {"schema": {"const": "openaria.audio-clock.v1"}},
+    }
     return Draft202012Validator(
-        _pinned_ylx_schema(
-            "ylx-device-session-v2.schema.json",
-            YLX_DEVICE_SESSION_V2_SCHEMA_SHA256,
-        ),
+        schema,
         format_checker=FormatChecker(),
     )
 
@@ -1545,26 +1550,12 @@ def _validate_device_session_v2_audio_invariants(manifest: dict[str, Any]) -> No
         )
     if sample_total != sample_count:
         raise PipelineError("device-session v2 invariant rejection: audio.sample_count")
-    sync = audio["sync"]
-    if abs(sync["start_time_seconds"] - segments[0]["start_time_seconds"]) > 1e-9:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync start_time_seconds"
-        )
-    if abs(sync["end_time_seconds"] - segments[-1]["end_time_seconds"]) > 1e-9:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync end_time_seconds"
-        )
-    sync_duration = float(sync["end_time_seconds"]) - float(sync["start_time_seconds"])
-    expected_sync_duration = sample_count / sample_rate
-    if abs(sync_duration - expected_sync_duration) > duration_tolerance:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync duration"
-        )
-    duration = float(manifest["time"]["duration_seconds"])
-    if not (0 <= sync["start_time_seconds"] < sync["end_time_seconds"] <= duration):
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync interval"
-        )
+    from openaria.bridge.sdk._audio_clock import audio_clock_report
+
+    try:
+        audio_clock_report(audio, manifest["time"]["duration_seconds"])
+    except (ValueError, TypeError, KeyError) as error:
+        raise PipelineError(f"device-session v2 invariant rejection: {error}") from error
 
 
 def _validate_device_session_v2_invariants(manifest: dict[str, Any]) -> None:
@@ -3382,6 +3373,23 @@ def export_sbs(
         prefix=".ylx-sbs-export-", dir=output.parent
     ) as staging_directory:
         staging_output = Path(staging_directory) / "output.mp4"
+        if session.source_manifest_schema == DEVICE_SESSION_V2_SCHEMA:
+            from openaria.bridge.sdk._media import render_session_video
+            from openaria.bridge.sdk.errors import ContractError, ExportError
+
+            try:
+                render_session_video(
+                    session.directory,
+                    session.source_manifest_path.read_bytes(),
+                    staging_output,
+                    preset=preset,
+                    crf=crf if crf is not None else _default_sbs_export_crf(session),
+                    audio_bitrate=audio_bitrate,
+                )
+            except (ContractError, ExportError) as error:
+                raise PipelineError(str(error)) from error
+            _commit_staged_sbs_export(staging_output, output)
+            return output
         if workdir is None:
             temporary_workdir = Path(staging_directory)
             plan = build_sbs_export_plan(
