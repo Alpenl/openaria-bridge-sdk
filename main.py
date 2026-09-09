@@ -32,6 +32,8 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -90,6 +92,7 @@ READ_CHUNK_BYTES = 1024 * 1024
 
 DEVICE_SESSION_V1_SCHEMA = "ylx.device-session.v1"
 DEVICE_SESSION_V2_SCHEMA = "ylx.device-session.v2"
+DEVICE_SESSION_V3_SCHEMA = "ylx.device-session.v3"
 BUCKET_PUBLICATION_V2_SCHEMA = "ylx.bucket-publication.v2"
 BUCKET_PUBLICATION_V3_SCHEMA = "ylx.bucket-publication.v3"
 LEGACY_PUBLICATION_MANIFEST_SCHEMA = "legacy.publication-manifest.v1"
@@ -368,13 +371,24 @@ def _device_session_v1_validator() -> Draft202012Validator:
 
 @lru_cache
 def _device_session_v2_validator() -> Draft202012Validator:
+    schema = _pinned_ylx_schema(
+        "ylx-device-session-v2.schema.json", YLX_DEVICE_SESSION_V2_SCHEMA_SHA256,
+    )
+    # Conductor's versioned clock extension does not modify the frozen vendor pin.
+    schema["$defs"]["recordedAudio"]["properties"]["capture_clock"] = {
+        "type": "object", "required": ["schema"],
+        "properties": {"schema": {"const": "openaria.audio-clock.v1"}},
+    }
     return Draft202012Validator(
-        _pinned_ylx_schema(
-            "ylx-device-session-v2.schema.json",
-            YLX_DEVICE_SESSION_V2_SCHEMA_SHA256,
-        ),
+        schema,
         format_checker=FormatChecker(),
     )
+
+
+@lru_cache
+def _device_session_v3_validator() -> Draft202012Validator:
+    schema = json.loads((Path(__file__).parent / "openaria/bridge/sdk/schemas/ylx-device-session-v3.schema.json").read_text())
+    return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 @lru_cache
@@ -390,13 +404,22 @@ def _bucket_publication_v2_validator() -> Draft202012Validator:
 
 @lru_cache
 def _bucket_publication_v3_validator() -> Draft202012Validator:
-    return Draft202012Validator(
-        _pinned_ylx_schema(
-            "ylx-bucket-publication-v3.schema.json",
-            YLX_BUCKET_PUBLICATION_V3_SCHEMA_SHA256,
-        ),
-        format_checker=FormatChecker(),
+    schema = _pinned_ylx_schema(
+        "ylx-bucket-publication-v3.schema.json", YLX_BUCKET_PUBLICATION_V3_SCHEMA_SHA256,
     )
+    # Keep frozen vendor bytes; extend the accepted source discriminator only.
+    def extend(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("const") == DEVICE_SESSION_V2_SCHEMA:
+                value.pop("const")
+                value["enum"] = [DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA]
+            for child in value.values():
+                extend(child)
+        elif isinstance(value, list):
+            for child in value:
+                extend(child)
+    extend(schema)
+    return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 def _validate_schema(validator: Draft202012Validator, value: Any, label: str) -> None:
@@ -1545,26 +1568,12 @@ def _validate_device_session_v2_audio_invariants(manifest: dict[str, Any]) -> No
         )
     if sample_total != sample_count:
         raise PipelineError("device-session v2 invariant rejection: audio.sample_count")
-    sync = audio["sync"]
-    if abs(sync["start_time_seconds"] - segments[0]["start_time_seconds"]) > 1e-9:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync start_time_seconds"
-        )
-    if abs(sync["end_time_seconds"] - segments[-1]["end_time_seconds"]) > 1e-9:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync end_time_seconds"
-        )
-    sync_duration = float(sync["end_time_seconds"]) - float(sync["start_time_seconds"])
-    expected_sync_duration = sample_count / sample_rate
-    if abs(sync_duration - expected_sync_duration) > duration_tolerance:
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync duration"
-        )
-    duration = float(manifest["time"]["duration_seconds"])
-    if not (0 <= sync["start_time_seconds"] < sync["end_time_seconds"] <= duration):
-        raise PipelineError(
-            "device-session v2 invariant rejection: audio sync interval"
-        )
+    from openaria.bridge.sdk._audio_clock import audio_clock_report
+
+    try:
+        audio_clock_report(audio, manifest["time"]["duration_seconds"])
+    except (ValueError, TypeError, KeyError) as error:
+        raise PipelineError(f"device-session v2 invariant rejection: {error}") from error
 
 
 def _validate_device_session_v2_invariants(manifest: dict[str, Any]) -> None:
@@ -1855,7 +1864,10 @@ def _read_device_session_v2(
     manifest_bytes: bytes,
     manifest: dict[str, Any],
 ) -> Session:
-    _validate_schema(_device_session_v2_validator(), manifest, "device-session v2")
+    _validate_schema(
+        _device_session_v3_validator() if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else _device_session_v2_validator(),
+        manifest, "device-session v3" if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else "device-session v2",
+    )
     _validate_device_session_v2_invariants(manifest)
 
     expected_top = {
@@ -1966,7 +1978,7 @@ def _read_device_session_v2(
         )
     elif layout == "split-eyes":
         _require_device_session_v1(
-            video_codec == "h264" and video.get("container") == "mp4",
+            video_codec in {"h264", "hevc"} and video.get("container") == "mp4",
             "split-eyes video fields",
         )
         segments = video.get("segments")
@@ -2081,9 +2093,9 @@ def _read_device_session_v2(
         source_manifest_path=manifest_path,
         source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
         source_manifest_revision=f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}",
-        source_signature={"status": "device_session_v2_sealed"},
+        source_signature={"status": "device_session_v3_sealed" if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else "device_session_v2_sealed"},
         source_manifest_name="manifest.json",
-        source_manifest_schema=DEVICE_SESSION_V2_SCHEMA,
+        source_manifest_schema=manifest["schema"],
         source_manifest_size_bytes=len(manifest_bytes),
         manifest_id=manifest_id,
         volume_id=volume_id,
@@ -2117,7 +2129,7 @@ def _dispatch_root_manifest(
         return _read_device_session_v1(
             directory, manifest_path, manifest_bytes, manifest
         )
-    if schema == DEVICE_SESSION_V2_SCHEMA:
+    if schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
         return _read_device_session_v2(
             directory, manifest_path, manifest_bytes, manifest
         )
@@ -2131,7 +2143,7 @@ def _validate_closed_device_session_take_graph(sessions: list[Session]) -> None:
         session
         for session in sessions
         if session.source_manifest_schema
-        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA}
+        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
     ]
     if not device_sessions:
         return
@@ -2259,12 +2271,16 @@ def read_sessions(
     registry: Any = None,
     external_device_identity: str | None = None,
     allow_unsigned: bool = False,
+    *,
+    on_error: Callable[[Path, Exception], None] | None = None,
 ) -> list[Session]:
     """Every published session on the card, oldest first.
 
     A directory without a publication manifest is skipped rather than guessed
     at: an interrupted capture leaves a partial tree behind, and inventing an
     inventory for it would mean uploading whatever happens to be on disk.
+    With ``on_error``, rejected directories are reported and independent valid
+    takes remain available. The default keeps strict, whole-card validation.
     """
     if recordings.is_symlink():
         raise PipelineError(f"recordings directory {recordings} must not be a symlink")
@@ -2278,57 +2294,121 @@ def read_sessions(
             f"{recordings} cannot be listed ({error.strerror}); is the card still inserted?"
         ) from error
     for directory in directories:
-        root_manifest_path = directory / "manifest.json"
-        if root_manifest_path.is_symlink():
-            print(f"  skip {directory.name}: root manifest is a symlink")
-            continue
-        if root_manifest_path.is_file():
-            manifest_bytes = _read_regular_file(
-                directory, Path("manifest.json"), "manifest.json"
-            )
-            manifest = parse_strict_json(manifest_bytes, "manifest.json")
-            sessions.append(
-                _dispatch_root_manifest(
-                    directory, root_manifest_path, manifest_bytes, manifest
-                )
-            )
-            continue
 
-        manifest_path = directory / "publication_manifest.json"
-        if manifest_path.is_symlink():
-            print(f"  skip {directory.name}: publication manifest is a symlink")
-            continue
-        if not manifest_path.is_file():
-            print(
-                f"  skip {directory.name}: no publication manifest (capture never finished)"
+        def report_skip(reason: str, current: Path = directory) -> None:
+            if on_error is None:
+                print(f"  skip {current.name}: {reason}")
+            else:
+                on_error(current, PipelineError(reason))
+
+        try:
+            session = _read_session_directory(
+                directory,
+                registry,
+                external_device_identity,
+                allow_unsigned,
+                report_skip,
             )
-            continue
-        manifest_bytes = _read_regular_file(
-            directory, Path("publication_manifest.json"), "publication_manifest.json"
-        )
-        manifest = parse_strict_json(manifest_bytes, "publication_manifest.json")
-        if not isinstance(manifest, dict):
-            raise PipelineError("publication_manifest.json must be an object")
-        if not manifest.get("integrity_ok"):
-            print(
-                f"  skip {directory.name}: the card marks this publication as not intact"
-            )
-            continue
-        sessions.append(
-            _session_from_publication_manifest(
-                directory=directory,
-                source_directory_name=directory.name,
-                manifest_path=manifest_path,
-                manifest_bytes=manifest_bytes,
-                manifest=manifest,
-                registry=registry,
-                external_device_identity=external_device_identity,
-                allow_unsigned=allow_unsigned,
-                check_source_signature=True,
-            )
-        )
-    _validate_closed_device_session_take_graph(sessions)
+        except (PipelineError, OSError) as error:
+            if on_error is None:
+                raise
+            on_error(directory, error)
+        else:
+            if session is not None:
+                sessions.append(session)
+    if on_error is None:
+        _validate_closed_device_session_take_graph(sessions)
+    else:
+        sessions = _readable_session_takes(sessions, on_error)
     return sorted(sessions, key=_oldest_first_session_key)
+
+
+def _read_session_directory(
+    directory: Path,
+    registry: Any,
+    external_device_identity: str | None,
+    allow_unsigned: bool,
+    report_skip: Callable[[str], None],
+) -> Session | None:
+    root_manifest_path = directory / "manifest.json"
+    if root_manifest_path.is_symlink():
+        report_skip("root manifest is a symlink")
+        return None
+    if root_manifest_path.is_file():
+        manifest_bytes = _read_regular_file(
+            directory, Path("manifest.json"), "manifest.json"
+        )
+        manifest = parse_strict_json(manifest_bytes, "manifest.json")
+        return _dispatch_root_manifest(
+            directory, root_manifest_path, manifest_bytes, manifest
+        )
+
+    manifest_path = directory / "publication_manifest.json"
+    if manifest_path.is_symlink():
+        report_skip("publication manifest is a symlink")
+        return None
+    if not manifest_path.is_file():
+        report_skip("no publication manifest (capture never finished)")
+        return None
+    manifest_bytes = _read_regular_file(
+        directory, Path("publication_manifest.json"), "publication_manifest.json"
+    )
+    manifest = parse_strict_json(manifest_bytes, "publication_manifest.json")
+    if not isinstance(manifest, dict):
+        raise PipelineError("publication_manifest.json must be an object")
+    if not manifest.get("integrity_ok"):
+        report_skip("the card marks this publication as not intact")
+        return None
+    return _session_from_publication_manifest(
+        directory=directory,
+        source_directory_name=directory.name,
+        manifest_path=manifest_path,
+        manifest_bytes=manifest_bytes,
+        manifest=manifest,
+        registry=registry,
+        external_device_identity=external_device_identity,
+        allow_unsigned=allow_unsigned,
+        check_source_signature=True,
+    )
+
+
+def _readable_session_takes(
+    sessions: list[Session], on_error: Callable[[Path, Exception], None]
+) -> list[Session]:
+    device_sessions = [
+        session
+        for session in sessions
+        if session.source_manifest_schema
+        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+    ]
+    readable = [
+        session
+        for session in sessions
+        if session.source_manifest_schema
+        not in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+    ]
+    session_ids = Counter(session.session_id for session in device_sessions)
+    manifest_ids = Counter(session.manifest_id for session in device_sessions)
+    by_take: dict[str, list[Session]] = {}
+    for session in device_sessions:
+        by_take.setdefault(session.take["take_id"], []).append(session)
+    for members in by_take.values():
+        try:
+            for session in members:
+                if (
+                    session_ids[session.session_id] > 1
+                    or manifest_ids[session.manifest_id] > 1
+                ):
+                    raise PipelineError(
+                        "take graph rejection: duplicate session_id or manifest_id"
+                    )
+            _validate_closed_device_session_take_graph(members)
+        except PipelineError as error:
+            for session in members:
+                on_error(session.directory, error)
+        else:
+            readable.extend(members)
+    return readable
 
 
 # --------------------------------------------------------------------------
@@ -2532,7 +2612,7 @@ def _device_session_v2_audio_segments_by_path(
     session: Session,
 ) -> dict[str, dict[str, Any]]:
     if (
-        session.source_manifest_schema != DEVICE_SESSION_V2_SCHEMA
+        session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
         or session.source_audio.get("state") != "recorded"
     ):
         return {}
@@ -2855,7 +2935,7 @@ def _normalization_cache_key(
         "faststart": True,
         "crf": (
             CRF_FOR_H264_SOURCE
-            if session.source_codec == "h264"
+            if session.source_codec in {"h264", "hevc"}
             else CRF_FOR_MJPEG_SOURCE
         ),
     }
@@ -2863,7 +2943,7 @@ def _normalization_cache_key(
 
 def _normalization_crf_for_session(session: Session) -> int:
     return (
-        CRF_FOR_H264_SOURCE if session.source_codec == "h264" else CRF_FOR_MJPEG_SOURCE
+        CRF_FOR_H264_SOURCE if session.source_codec in {"h264", "hevc"} else CRF_FOR_MJPEG_SOURCE
     )
 
 
@@ -3298,9 +3378,11 @@ def build_sbs_export_ffmpeg_arguments(plan: SbsExportPlan) -> list[str]:
             )
         arguments += [
             "-filter_complex",
-            "[0:v:0]setpts=PTS-STARTPTS[l];"
-            "[1:v:0]setpts=PTS-STARTPTS[r];"
-            "[l][r]hstack=inputs=2[v]",
+            (
+                "[0:v:0]setpts=PTS-STARTPTS[l];"
+                "[1:v:0]setpts=PTS-STARTPTS[r];"
+                "[l][r]hstack=inputs=2[v]"
+            ),
             "-map",
             "[v]",
         ]
@@ -3382,6 +3464,23 @@ def export_sbs(
         prefix=".ylx-sbs-export-", dir=output.parent
     ) as staging_directory:
         staging_output = Path(staging_directory) / "output.mp4"
+        if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+            from openaria.bridge.sdk._media import render_session_video
+            from openaria.bridge.sdk.errors import ContractError, ExportError
+
+            try:
+                render_session_video(
+                    session.directory,
+                    session.source_manifest_path.read_bytes(),
+                    staging_output,
+                    preset=preset,
+                    crf=crf if crf is not None else _default_sbs_export_crf(session),
+                    audio_bitrate=audio_bitrate,
+                )
+            except (ContractError, ExportError) as error:
+                raise PipelineError(str(error)) from error
+            _commit_staged_sbs_export(staging_output, output)
+            return output
         if workdir is None:
             temporary_workdir = Path(staging_directory)
             plan = build_sbs_export_plan(
@@ -4147,7 +4246,7 @@ def _normalize_publication_prefix(prefix: str) -> str:
 
 
 def _publication_source_audio(session: Session) -> dict[str, Any]:
-    if session.source_manifest_schema != DEVICE_SESSION_V2_SCHEMA:
+    if session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
         raise PipelineError("source_audio is only defined for device-session v2")
     if session.source_audio.get("state") == "recorded":
         return {
@@ -4166,8 +4265,8 @@ def _publication_source_audio(session: Session) -> dict[str, Any]:
 def _publication_contract_for_session(session: Session) -> tuple[str, str]:
     if session.source_manifest_schema == DEVICE_SESSION_V1_SCHEMA:
         return BUCKET_PUBLICATION_V2_SCHEMA, DEVICE_SESSION_V1_SCHEMA
-    if session.source_manifest_schema == DEVICE_SESSION_V2_SCHEMA:
-        return BUCKET_PUBLICATION_V3_SCHEMA, DEVICE_SESSION_V2_SCHEMA
+    if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+        return BUCKET_PUBLICATION_V3_SCHEMA, session.source_manifest_schema
     raise PipelineError(
         f"unsupported source manifest schema {session.source_manifest_schema}"
     )
@@ -4185,7 +4284,9 @@ def _validate_bucket_publication(
         label = "bucket-publication v2"
     elif publication_schema == BUCKET_PUBLICATION_V3_SCHEMA:
         validator = _bucket_publication_v3_validator()
-        expected_source_schema = DEVICE_SESSION_V2_SCHEMA
+        expected_source_schema = session.source_manifest_schema
+        if expected_source_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+            raise PipelineError("bucket-publication v3 requires a v2/v3 source")
         label = "bucket-publication v3"
     else:
         raise PipelineError(
@@ -4703,6 +4804,7 @@ def upload(
     if session.source_manifest_schema in {
         DEVICE_SESSION_V1_SCHEMA,
         DEVICE_SESSION_V2_SCHEMA,
+        DEVICE_SESSION_V3_SCHEMA,
     }:
         return _upload_versioned_bucket_publication(
             session,

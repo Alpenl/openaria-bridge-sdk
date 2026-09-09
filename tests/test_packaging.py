@@ -25,6 +25,7 @@ EXPECTED_RUNTIME_PATHS = {
     "openaria/bridge/sdk/_json.py",
     "openaria/bridge/sdk/_lan.py",
     "openaria/bridge/sdk/_media.py",
+    "openaria/bridge/sdk/_tui_widgets.py",
     "openaria/bridge/sdk/cli.py",
     "openaria/bridge/sdk/client.py",
     "openaria/bridge/sdk/errors.py",

@@ -58,6 +58,28 @@ class ExportedSession:
     # ``path`` remains the session directory for 0.3 callers.
     media_path: Path | None = None
     media_bytes: int = 0
+    manifest_sha256: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class DeleteFailure:
+    session_id: str
+    error: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DeleteResult:
+    source: Source
+    deleted_session_ids: tuple[str, ...]
+    failed_sessions: tuple[DeleteFailure, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class ExportFailure:
+    """One recording that could not be exported in a continuing batch."""
+
+    session_id: str
+    error: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,6 +90,7 @@ class ExportResult:
     output_root: Path
     sessions: tuple[ExportedSession, ...]
     unavailable_sessions: tuple[SessionInfo, ...] = ()
+    failed_sessions: tuple[ExportFailure, ...] = ()
 
     @property
     def exported_count(self) -> int:
