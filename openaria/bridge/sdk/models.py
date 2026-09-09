@@ -58,6 +58,7 @@ class ExportedSession:
     # ``path`` remains the session directory for 0.3 callers.
     media_path: Path | None = None
     media_bytes: int = 0
+    manifest_sha256: str = ""
 
 
 @dataclasses.dataclass(frozen=True)

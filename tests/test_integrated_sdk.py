@@ -136,6 +136,24 @@ def test_modified_final_video_is_never_reused(tmp_path: Path) -> None:
         sdk.export()
 
 
+def test_card_delete_refreshes_inventory_and_preserves_exported_media(
+    tmp_path: Path,
+) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
+    source = sdk.discover()[0]
+    exported = sdk.export(source=source)
+    from openaria.bridge.sdk._history import ExportHistory
+
+    history = ExportHistory(tmp_path / "history.sqlite3")
+    assert history.exported_ids(source, sdk.list_sessions(source), sdk.output) == {
+        SESSION_ID
+    }
+    result = sdk.delete_sessions(source=source, session_ids=[SESSION_ID])
+    assert result.deleted_session_ids == (SESSION_ID,)
+    assert exported.sessions[0].media_path.is_file()
+    assert sdk.list_sessions(source) == ()
 
 
 def test_card_mode_explicit_path_and_export_override(tmp_path: Path) -> None:

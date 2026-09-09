@@ -256,6 +256,7 @@ def export_session_tree(
                 reused=True,
                 media_path=final_directory / FINAL_MEDIA_NAME,
                 media_bytes=existing_media_bytes,
+                manifest_sha256=manifest_sha256,
             )
         if _legacy_export_matches(
             final_directory,
@@ -282,6 +283,7 @@ def export_session_tree(
                 total_bytes=artifact_bytes,
                 media_path=rendered.path,
                 media_bytes=rendered.size_bytes,
+                manifest_sha256=manifest_sha256,
             )
         raise ExportError(
             f"destination already exists but does not match the session: {final_directory}"
@@ -345,6 +347,7 @@ def export_session_tree(
         total_bytes=artifact_bytes,
         media_path=final_directory / FINAL_MEDIA_NAME,
         media_bytes=rendered.size_bytes,
+        manifest_sha256=manifest_sha256,
     )
 
 
