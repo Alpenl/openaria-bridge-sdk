@@ -80,7 +80,7 @@ def test_export_options_bind_cache_and_preserve_verified_sources(
     card = tmp_path / "card"
     _, payloads, _ = _build_card(card)
     sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
-    options = ExportOptions(video_codec="hevc", retain_sources=True)
+    options = ExportOptions(video_codec="hevc", retain_sources=True, video_quality="standard")
     first = sdk.export(options=options).sessions[0]
     source = first.path / ".openaria/source"
     for relative, payload in payloads.items():
@@ -89,6 +89,14 @@ def test_export_options_bind_cache_and_preserve_verified_sources(
     assert receipt["output"]["video_codec"] == "hevc"
     assert receipt["cleanup"]["removed_paths"] == []
     assert sdk.export(options=options).sessions[0].reused
+    high = ExportOptions(video_codec="hevc", retain_sources=True, video_quality="high")
+    upgraded = sdk.export(options=high).sessions[0]
+    assert not upgraded.reused
+    assert sdk.export(options=high).sessions[0].reused
+    upgraded_receipt = json.loads((upgraded.path / ".openaria/media.json").read_text())
+    assert upgraded_receipt["options"]["video_quality"] == "high"
+    for relative, payload in payloads.items():
+        assert (upgraded.path / ".openaria/source" / relative).read_bytes() == payload
     rebuilt = sdk.export().sessions[0]
     assert not rebuilt.reused
     assert sdk.export().sessions[0].reused
@@ -536,12 +544,22 @@ def test_mdns_service_info_preserves_advertised_port() -> None:
     assert endpoints_from_service_info(info) == ("http://192.0.2.24:18080",)
 
 
-def _build_card(card: Path) -> tuple[bytes, dict[str, bytes], dict[str, str]]:
+def _build_card(card: Path, *, codec: str | None = None) -> tuple[bytes, dict[str, bytes], dict[str, str]]:
     fixture = (
         Path(__file__).resolve().parents[1]
         / "vendor/ylx-contracts/fixtures/valid/ylx-device-session-v2.audio-not-recorded.json"
     )
     manifest = json.loads(fixture.read_text(encoding="utf-8"))
+    if codec is not None:
+        manifest["schema"] = "ylx.device-session.v3"
+        manifest["video"]["codec"] = codec
+        manifest["video"]["encoding"] = {
+            "schema": "openaria.recording-encoding.v1", "codec": codec,
+            "rate_control": "cbr", "bitrate_kbps": 16384,
+            "min_qp": 18, "max_qp": 32, "intra_qp": 20, "initial_qp": 22,
+            "gop_frames": 30, "vbv_ms": 3000, "bit_depth": 8, "b_frames": 0,
+            "pixel_format": "yuv420p", "profile": "high" if codec == "h264" else "main",
+        }
     payloads = {
         "video/left_00000.mp4": b"left-video",
         "video/right_00000.mp4": b"right-video",
@@ -914,3 +932,18 @@ def test_artifact_download_never_removes_a_preexisting_target(tmp_path: Path) ->
         DeviceApiClient(endpoint)._download_artifact(SESSION_ID, artifact, destination)
     assert destination.read_bytes() == b"keep this file"
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_v3_card_export_preserves_true_manifest_and_source_bytes(tmp_path, codec):
+    from openaria.bridge.sdk import ExportOptions
+    card = tmp_path / "card"
+    raw, payloads, _ = _build_card(card, codec=codec)
+    sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
+    options = ExportOptions(video_quality="high", retain_sources=True)
+    result = sdk.export(options=options).sessions[0]
+    source = result.path / ".openaria/source"
+    assert (source / "manifest.json").read_bytes() == raw
+    for relative, payload in payloads.items():
+        assert (source / relative).read_bytes() == payload
+    assert sdk.export(options=options).sessions[0].reused

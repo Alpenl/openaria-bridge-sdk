@@ -202,23 +202,36 @@ from openaria.bridge.sdk import OpenAriaSDK, ExportOptions
 OpenAriaSDK(mode="lan", output="./archives").export(
     session_ids=["YOUR_SESSION_ID"],
     options=ExportOptions(
-        video_codec="hevc",          # H.265 Main/hvc1, medium/CRF 22
+        video_codec="hevc",          # H.265 Main/hvc1
+        video_quality="high",        # Default: medium/CRF 18 for more detail
         retain_sources=True,         # Keep exact MP4/WAV bytes and manifest
         audio_calibration_seconds=0, # Positive values delay audio
     ),
 )
 ```
 
-The default remains H.264 veryfast/CRF 20, AAC 192 kb/s, and zero physical
+The default is H.264 medium/CRF 18, AAC 192 kb/s, and zero physical
 calibration. HEVC saves space at the cost of export time and requires a HEVC
 player. Sample-clock correction and measured video frame timestamps apply to
 both codecs. Physical calibration is explicit and recorded in the receipt;
 use a value measured for the selected sessions, not a value from another camera
-or setup. A changed codec, calibration, or retention option rebuilds the export
+or setup. **高画质** (`video_quality="high"`) uses medium/CRF 18 for either codec.
+Select `video_quality="standard"` for the previous H.264 veryfast/CRF 20 or HEVC
+medium/CRF 22 settings. This high quality default preserves more recorded detail
+at the cost of export time and potentially larger files; it cannot restore
+detail already lost in camera capture or recording. Both quality levels keep
+the original eye dimensions (1920×1080 per eye becomes 3840×1080 side by side).
+A changed codec, quality, calibration, or retention option rebuilds the export
 atomically, keeping the previous verified directory as a hidden backup.
 With `retain_sources=True`, every original artifact remains under
 `.openaria/source`, verified by its original hash; no archive transcode is
 needed to preserve acquisition quality.
+
+Device Session v1/v2 recordings remain readable. Device Session v3 adds explicit
+recording encoder metadata and H.264/HEVC split-eye inputs. Source manifests and
+retained source artifacts keep their original bytes and hashes. Receipts created
+before the quality option existed are treated as standard quality and rebuilt
+when high quality is requested.
 
 LAN and recording-card sources produce the same user-facing result:
 

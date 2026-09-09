@@ -93,7 +93,7 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
     if not isinstance(manifest, dict):
         raise ContractError("Device Session manifest must be an object")
     schema = manifest.get("schema")
-    if schema not in {"ylx.device-session.v1", "ylx.device-session.v2"}:
+    if schema not in {"ylx.device-session.v1", "ylx.device-session.v2", "ylx.device-session.v3"}:
         raise ContractError(
             f"automatic media rendering does not support manifest schema {schema!r}"
         )

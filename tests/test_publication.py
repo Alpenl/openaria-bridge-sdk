@@ -1120,7 +1120,7 @@ def test_read_sessions_returns_publications_oldest_first(tmp_path: Path) -> None
 
 def test_device_session_unknown_major_schema_fails_closed(tmp_path: Path) -> None:
     def mutate(manifest: dict) -> None:
-        manifest["schema"] = "ylx.device-session.v3"
+        manifest["schema"] = "ylx.device-session.v99"
 
     with pytest.raises(main.PipelineError, match="unsupported device-session schema"):
         write_device_session_v1(tmp_path, mutate=mutate)

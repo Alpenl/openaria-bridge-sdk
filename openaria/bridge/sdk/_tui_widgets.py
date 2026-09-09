@@ -221,6 +221,12 @@ class ExportSettingsDialog(ModalScreen[ExportOptions | None]):
                 allow_blank=False,
                 id="export-codec",
             )
+            yield Select(
+                [("标准画质", "standard"), ("高画质 · 保留更多细节，生成更慢、文件可能更大", "high")],
+                value=self.options.video_quality,
+                allow_blank=False,
+                id="export-quality",
+            )
             yield Label("音频延后 (ms)，仅用于已标定的会话；默认 0")
             yield Input(
                 str(self.options.audio_calibration_seconds * 1000),
@@ -251,6 +257,7 @@ class ExportSettingsDialog(ModalScreen[ExportOptions | None]):
                 video_codec=str(self.query_one("#export-codec", Select).value),
                 audio_calibration_seconds=delay / 1000,
                 retain_sources=self.query_one("#export-retain", Checkbox).value,
+                video_quality=str(self.query_one("#export-quality", Select).value),
             )
         except (ValueError, OpenAriaError) as error:
             self.query_one("#entry-error", Static).update(str(error))

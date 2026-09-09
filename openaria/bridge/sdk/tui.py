@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -164,6 +165,19 @@ class OpenAriaTUI(App[None]):
         self._exporting = False
         self._export_started = 0.0
         self._log_count = 0
+        # Textual cancels the coroutine wrapper around ``to_thread`` workers,
+        # but the underlying synchronous HTTP call keeps running.  Serialize
+        # catalog reads so a rapid source switch/rescan cannot pile up
+        # requests on the device until its tiny HTTP server stops responding.
+        self._session_request_locks: dict[str, threading.Lock] = {}
+
+    def _list_sessions_serialized(
+        self, binding: SourceBinding
+    ) -> tuple[SessionInfo, ...]:
+        key = binding.source.api_base or binding.source.location
+        lock = self._session_request_locks.setdefault(key, threading.Lock())
+        with lock:
+            return binding.sdk.list_sessions(binding.source)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="workbench"):
@@ -389,7 +403,7 @@ class OpenAriaTUI(App[None]):
         started = time.monotonic()
         try:
             sessions = await asyncio.to_thread(
-                binding.sdk.list_sessions, binding.source
+                self._list_sessions_serialized, binding
             )
         except Exception as error:  # noqa: BLE001 - restore controls after backend failures
             self._sessions_loading = False
@@ -679,7 +693,9 @@ class OpenAriaTUI(App[None]):
         if options is not None:
             self.export_options = options
             self.notify(
-                f"{options.video_codec.upper()} · 音频延后 {options.audio_calibration_seconds * 1000:g} ms · "
+                f"{options.video_codec.upper()} · "
+                + ("高画质" if options.video_quality == "high" else "标准画质")
+                + f" · 音频延后 {options.audio_calibration_seconds * 1000:g} ms · "
                 + ("保留源媒体" if options.retain_sources else "仅保存成片")
             )
 

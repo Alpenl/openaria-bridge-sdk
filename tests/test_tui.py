@@ -1036,11 +1036,12 @@ def test_export_settings_survive_workbench_actions_and_reach_batch(
             await pilot.pause()
             assert isinstance(app.screen, ExportSettingsDialog)
             app.screen.query_one("#export-codec", Select).value = "hevc"
+            app.screen.query_one("#export-quality", Select).value = "high"
             app.screen.query_one("#export-delay", Input).value = "30"
             app.screen.query_one("#export-retain", Checkbox).value = True
             await pilot.click("#settings-apply")
             await pilot.pause()
-            expected = ExportOptions("hevc", 0.030, True)
+            expected = ExportOptions("hevc", 0.030, True, "high")
             assert app.export_options == expected
             app._deleting = True
             app._sync_controls()
@@ -1051,6 +1052,7 @@ def test_export_settings_survive_workbench_actions_and_reach_batch(
             app._sync_controls()
             await pilot.press("p")
             await pilot.pause()
+            assert app.screen.query_one("#export-quality", Select).value == "high"
             app.screen.query_one("#export-delay", Input).value = "1001"
             await pilot.click("#settings-apply")
             await pilot.pause()

@@ -89,7 +89,7 @@ def artifacts_from_manifest(
 
     artifacts: list[ArtifactDescriptor] = []
     schema = manifest.get("schema")
-    if schema in {"ylx.device-session.v1", "ylx.device-session.v2"}:
+    if schema in {"ylx.device-session.v1", "ylx.device-session.v2", "ylx.device-session.v3"}:
         audio = manifest.get("audio")
         if isinstance(audio, dict) and audio.get("state") == "recorded":
             try:
@@ -456,9 +456,9 @@ def _existing_export_matches(
     ):
         return None
     cleanup = media_receipt.get("cleanup")
-    recorded_options = media_receipt.get("options", dataclasses.asdict(ExportOptions()))
+    recorded_options = media_receipt.get("options", {})
     try:
-        previous_options = ExportOptions(**recorded_options)
+        previous_options = ExportOptions(**({"video_quality": "standard"} | recorded_options))
     except (TypeError, ValueError, ContractError):
         return None
     if not allow_legacy_renderer and previous_options != (options or ExportOptions()):
