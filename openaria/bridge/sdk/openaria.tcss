@@ -131,3 +131,7 @@ Screen.-narrow #brand { width: 1fr; }
 Screen.-short #masthead { height: 1; }
 Screen.-short #views { margin: 0; }
 Screen.-short #session-detail { display: none; }
+
+#export-settings { width: 8; height: 1; margin-left: 1; }
+ExportSettingsDialog { align: center middle; background: #000000 55%; }
+ExportSettingsDialog #entry-dialog { height: auto; max-height: 95%; }

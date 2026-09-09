@@ -15,9 +15,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static
+from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
+from .errors import OpenAriaError
 from .models import SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 
 class TextEntryDialog(ModalScreen[str | None]):
@@ -199,3 +201,58 @@ def free_bytes(path: Path) -> int | None:
         return shutil.disk_usage(existing_parent(path)).free
     except (OSError, ValueError):
         return None
+
+
+class ExportSettingsDialog(ModalScreen[ExportOptions | None]):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "cancel", "取消", show=False)
+    ]
+
+    def __init__(self, options: ExportOptions) -> None:
+        super().__init__()
+        self.options = options
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="entry-dialog"):
+            yield Label("导出设置")
+            yield Select(
+                [("H.264 · 常规成片", "h264"), ("H.265 · 较小归档，生成更慢", "hevc")],
+                value=self.options.video_codec,
+                allow_blank=False,
+                id="export-codec",
+            )
+            yield Label("音频延后 (ms)，仅用于已标定的会话；默认 0")
+            yield Input(
+                str(self.options.audio_calibration_seconds * 1000),
+                id="export-delay",
+                type="number",
+            )
+            yield Checkbox(
+                "保留原始视频和音频",
+                value=self.options.retain_sources,
+                id="export-retain",
+            )
+            yield Static("", id="entry-error")
+            with Horizontal(id="entry-actions"):
+                yield Button("取消", id="settings-cancel")
+                yield Button("应用", id="settings-apply", variant="primary")
+
+    @on(Button.Pressed, "#settings-cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#settings-apply")
+    def apply_settings(self) -> None:
+        try:
+            delay = float(self.query_one("#export-delay", Input).value)
+            if not -1000 <= delay <= 1000:
+                raise ValueError("音频补偿范围为 -1000 至 1000 ms")
+            options = ExportOptions(
+                video_codec=str(self.query_one("#export-codec", Select).value),
+                audio_calibration_seconds=delay / 1000,
+                retain_sources=self.query_one("#export-retain", Checkbox).value,
+            )
+        except (ValueError, OpenAriaError) as error:
+            self.query_one("#entry-error", Static).update(str(error))
+            return
+        self.dismiss(options)

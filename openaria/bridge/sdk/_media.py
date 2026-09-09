@@ -6,15 +6,18 @@ import dataclasses
 import hashlib
 import math
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable
+from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import imageio_ffmpeg
 
+from ._audio_clock import audio_clock_report
 from ._json import load_json
 from .errors import ContractError, ExportError
 
@@ -24,7 +27,7 @@ VIDEO_CRF = 20
 AUDIO_BITRATE = "192k"
 COMMAND_ERROR_LIMIT = 4000
 RENDERER_NAME = "openaria-ffmpeg-sbs"
-RENDERER_VERSION = 1
+RENDERER_VERSION = 5
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +45,10 @@ class MediaPlan:
     audio_sample_rate: int | None = None
     raw_mjpeg_fps: float | None = None
     output_fps: float = 0.0
+    indexed_frame_count: int | None = None
+    frame_pts_us: tuple[int, ...] = ()
+    audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
+    audio_tempo: float = 1.0
 
     @property
     def has_audio(self) -> bool:
@@ -75,6 +82,8 @@ class RenderedMedia:
     audio_offset_seconds: float | None
     video_frame_count: int = 0
     output_fps: float = 0.0
+    audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
+    audio_calibration_seconds: float = 0.0
 
 
 def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
@@ -149,11 +158,27 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
     else:
         raise ContractError(f"unsupported Device Session video layout: {layout!r}")
 
+    indexed_frame_count: int | None = None
+    frame_pts_us: tuple[int, ...] = ()
+    if mode == "split" and manifest.get("frames") is not None:
+        output_fps, frame_pts_us = _frame_clock(session_root, manifest)
+        indexed_frame_count = len(frame_pts_us)
+
     audio_paths: tuple[Path, ...] = ()
     audio_start: float | None = None
     sample_rate: int | None = None
     audio = manifest.get("audio")
+    clock_report: dict[str, Any] = {"continuity": "no-audio"}
+    audio_tempo = 1.0
     if isinstance(audio, dict) and audio.get("state") == "recorded":
+        try:
+            clock_report = audio_clock_report(
+                audio, manifest["time"]["duration_seconds"]
+            )
+        except (ValueError, TypeError, KeyError) as error:
+            raise ContractError(f"invalid audio clock: {error}") from error
+        if clock_report["continuity"] == "verified":
+            audio_tempo = clock_report["actual_sample_rate"] / audio["sample_rate"]
         audio_segments = _ordered_segments(audio.get("segments"), "audio")
         audio_paths = tuple(
             _artifact_path(
@@ -188,6 +213,65 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
         audio_sample_rate=sample_rate,
         raw_mjpeg_fps=raw_fps,
         output_fps=output_fps,
+        indexed_frame_count=indexed_frame_count,
+        frame_pts_us=frame_pts_us,
+        audio_clock=clock_report,
+        audio_tempo=audio_tempo,
+    )
+
+
+def _frame_clock(
+    session_root: Path, manifest: dict[str, Any]
+) -> tuple[float, tuple[int, ...]]:
+    frames = _object(manifest.get("frames"), "manifest frames")
+    expected = _positive_integer(frames.get("count"), "manifest frames count")
+    path = _artifact_path(session_root, frames.get("artifact"), "frame index artifact")
+    if path.is_symlink() or not path.is_file():
+        raise ExportError(f"verified frame index disappeared: {path}")
+    timestamps: list[int] = []
+    with path.open("rb") as handle:
+        for index, line in enumerate(handle):
+            row = _object(load_json(line, "frame index row"), "frame index row")
+            if (
+                row.get("schema") != "ylx.frame-index.v1"
+                or row.get("session_id") != manifest.get("session_id")
+                or isinstance(row.get("frame"), bool)
+                or row.get("frame") != index
+            ):
+                raise ContractError("frame index identity or frame sequence is invalid")
+            timestamp = _positive_integer(
+                row.get("host_monotonic_ns"), "frame index host_monotonic_ns"
+            )
+            if timestamps and timestamp <= timestamps[-1]:
+                raise ContractError("frame index clock must be strictly increasing")
+            timestamps.append(timestamp)
+    if len(timestamps) != expected or expected < 2:
+        raise ContractError(
+            "frame index count does not provide a complete capture clock"
+        )
+
+    # Camera effective_fps includes shutdown time; only frame timestamps measure cadence.
+    interval_ns = (timestamps[-1] - timestamps[0]) / (expected - 1)
+    pts = tuple((timestamp - timestamps[0] + 500) // 1000 for timestamp in timestamps)
+    if any(b <= a for a, b in pairwise(pts)):
+        raise ContractError(
+            "frame clock cannot be represented at microsecond precision"
+        )
+    return 1_000_000_000 / interval_ns, pts
+
+
+def _pts_expression(
+    values: tuple[int, ...], start: int = 0, end: int | None = None
+) -> str:
+    # A balanced lookup bounds FFmpeg expression depth and per-frame evaluation cost.
+    if end is None:
+        end = len(values)
+    if end - start == 1:
+        return str(values[start])
+    middle = (start + end) // 2
+    return (
+        f"if(lt(N,{middle}),{_pts_expression(values, start, middle)},"
+        f"{_pts_expression(values, middle, end)})"
     )
 
 
@@ -196,11 +280,33 @@ def render_session_video(
     manifest_bytes: bytes,
     output: Path,
     progress: Callable[[str], None] | None = None,
+    *,
+    preset: str = VIDEO_PRESET,
+    crf: int = VIDEO_CRF,
+    audio_bitrate: str = AUDIO_BITRATE,
+    audio_calibration_seconds: float = 0.0,
+    video_codec: str = "h264",
 ) -> RenderedMedia:
     """Create and validate one playable SBS MP4 without exposing partial output."""
 
     plan = build_media_plan(session_root, manifest_bytes)
+    if not math.isfinite(audio_calibration_seconds):
+        raise ContractError("audio calibration must be finite")
+    if audio_calibration_seconds:
+        if plan.audio_start_time_seconds is None:
+            raise ContractError("audio calibration requires recorded audio")
+        plan = dataclasses.replace(
+            plan,
+            audio_start_time_seconds=(
+                plan.audio_start_time_seconds + audio_calibration_seconds
+            ),
+        )
     source_frames, _ = _measure_video(plan)
+    if (
+        plan.indexed_frame_count is not None
+        and source_frames != plan.indexed_frame_count
+    ):
+        raise ExportError("source video frame count differs from its capture clock")
     source_duration = source_frames / plan.output_fps
     plan = dataclasses.replace(plan, video_duration_seconds=source_duration)
     if output.exists() or output.is_symlink():
@@ -222,12 +328,23 @@ def render_session_video(
             plan,
             workdir=workdir,
             output=staged_output,
+            preset=preset,
+            crf=crf,
+            audio_bitrate=audio_bitrate,
+            video_codec=video_codec,
         )
         _run(
             [executable, *arguments],
             "FFmpeg could not create the final recording",
         )
         _validate_media(executable, staged_output, expect_audio=plan.has_audio)
+        if plan.frame_pts_us:
+            _validate_frame_pts(
+                executable,
+                staged_output,
+                plan.frame_pts_us,
+                round(1_000_000 / plan.output_fps),
+            )
         size_bytes = staged_output.stat().st_size
         if size_bytes <= 0:
             raise ExportError("FFmpeg created an empty final recording")
@@ -253,6 +370,8 @@ def render_session_video(
         audio_offset_seconds=plan.audio_offset_seconds,
         video_frame_count=output_frames,
         output_fps=plan.output_fps,
+        audio_clock=plan.audio_clock,
+        audio_calibration_seconds=audio_calibration_seconds,
     )
 
 
@@ -261,9 +380,15 @@ def build_ffmpeg_arguments(
     *,
     workdir: Path,
     output: Path,
+    preset: str = VIDEO_PRESET,
+    crf: int = VIDEO_CRF,
+    audio_bitrate: str = AUDIO_BITRATE,
+    video_codec: str = "h264",
 ) -> list[str]:
     """Build one deterministic FFmpeg command for tests and execution."""
 
+    if video_codec not in {"h264", "hevc"}:
+        raise ContractError("video_codec must be h264 or hevc")
     workdir.mkdir(parents=True, exist_ok=True)
     arguments = [
         "-hide_banner",
@@ -279,9 +404,14 @@ def build_ffmpeg_arguments(
         arguments.extend(_concat_input(plan.left_segments, workdir, "left"))
         arguments.extend(_concat_input(plan.right_segments, workdir, "right"))
         filters.append(
-            "[0:v:0]setpts=PTS-STARTPTS[left];"
-            "[1:v:0]setpts=PTS-STARTPTS[right];"
-            "[left][right]hstack=inputs=2[video]"
+            f"[0:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[left];"
+            f"[1:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[right];"
+            "[left][right]hstack=inputs=2"
+            + (
+                f"[stacked];[stacked]settb=AVTB,setpts='{_pts_expression(plan.frame_pts_us)}'[video]"
+                if plan.frame_pts_us
+                else "[video]"
+            )
         )
         video_map = "[video]"
         audio_input_index = 2
@@ -311,7 +441,12 @@ def build_ffmpeg_arguments(
         filters.append(_audio_filter(plan, audio_input_index))
 
     if filters:
-        arguments.extend(["-filter_complex", ";".join(filters)])
+        if plan.frame_pts_us:
+            script = workdir / "timeline.fffilter"
+            script.write_text(";".join(filters), encoding="ascii")
+            arguments.extend(["-filter_complex_script", str(script)])
+        else:
+            arguments.extend(["-filter_complex", ";".join(filters)])
     arguments.extend(["-map", video_map])
     if plan.has_audio:
         arguments.extend(["-map", "[audio]"])
@@ -323,30 +458,73 @@ def build_ffmpeg_arguments(
             "-map_metadata",
             "-1",
             "-c:v",
-            "libx264",
+            "libx265" if video_codec == "hevc" else "libx264",
             "-profile:v",
-            "high",
+            "main" if video_codec == "hevc" else "high",
             "-preset",
-            VIDEO_PRESET,
+            preset,
             "-crf",
-            str(VIDEO_CRF),
+            str(crf),
             "-pix_fmt",
             "yuv420p",
-            "-r",
-            _decimal(plan.output_fps),
-            "-fps_mode",
-            "cfr",
+            "-color_primaries",
+            "2",
+            "-color_trc",
+            "2",
+            "-colorspace",
+            "2",
+            "-color_range",
+            "tv",
             "-metadata:s:v:0",
             "stereo_mode=left_right",
         ]
     )
+    if video_codec == "hevc":
+        arguments.extend(
+            [
+                "-tag:v",
+                "hvc1",
+                "-x265-params",
+                "pools=4:frame-threads=2:log-level=error",
+            ]
+        )
+    if plan.frame_pts_us:
+        end_us = plan.frame_pts_us[-1] + round(1_000_000 / plan.output_fps)
+        arguments.extend(
+            [
+                "-fps_mode",
+                "passthrough",
+                "-enc_time_base:v",
+                "1:1000000",
+                "-video_track_timescale",
+                "1000000",
+                "-movie_timescale",
+                "1000000",
+                "-bf",
+                "0",
+                "-x265-params" if video_codec == "hevc" else "-x264-params",
+                f"fps={_frame_rate(plan.output_fps)}"
+                + (
+                    ":pools=4:frame-threads=2:log-level=error"
+                    if video_codec == "hevc"
+                    else ""
+                ),
+                "-bsf:v",
+                (
+                    "setts=pts=PTS:dts=DTS:duration='"
+                    f"if(eq(N,{len(plan.frame_pts_us) - 1}),{end_us}-DTS+STARTDTS,DURATION)'"
+                ),
+            ]
+        )
+    else:
+        arguments.extend(["-r", _frame_rate(plan.output_fps), "-fps_mode", "cfr"])
     if plan.has_audio:
         arguments.extend(
             [
                 "-c:a",
                 "aac",
                 "-b:a",
-                AUDIO_BITRATE,
+                audio_bitrate,
             ]
         )
     arguments.extend(
@@ -367,14 +545,31 @@ def _audio_filter(plan: MediaPlan, input_index: int) -> str:
     offset = plan.audio_offset_seconds
     if offset is None:
         raise ContractError("audio media plan omitted its timeline offset")
-    chain = f"[{input_index}:a:0]aresample=async=1:first_pts=0"
-    if offset < -0.0005:
+    chain = f"[{input_index}:a:0]aresample=async=0:first_pts=0"
+    if abs(plan.audio_tempo - 1.0) > 1e-9:
+        rate = plan.audio_sample_rate
+        if rate is None or rate <= 0:
+            raise ContractError("audio sample clock requires a positive sample rate")
+        actual_rate = rate * plan.audio_tempo
+        if not math.isfinite(actual_rate) or actual_rate <= 0:
+            raise ContractError("invalid audio sample clock rate")
+        scale = min(1000, int((2**31 - 1) / max(rate, actual_rate)))
+        if scale < 1:
+            raise ContractError("audio sample clock rate exceeds FFmpeg limits")
+        # Virtual rates retain millihertz precision without WSOLA moving transients.
+        chain += (
+            f",asetrate={round(actual_rate * scale)},aresample={rate * scale}"
+            f",asetrate={rate}"
+        )
+    if offset < 0:
         chain += f",atrim=start={_decimal(-offset)},asetpts=PTS-STARTPTS"
     else:
         chain += ",asetpts=PTS-STARTPTS"
-        if offset > 0.0005:
-            delay_ms = max(1, round(offset * 1000))
-            chain += f",adelay={delay_ms}:all=1"
+        if offset > 0:
+            rate = plan.audio_sample_rate
+            if rate is None or rate <= 0:
+                raise ContractError("audio delay requires a positive sample rate")
+            chain += f",adelay={round(offset * rate)}S:all=1"
     if plan.video_duration_seconds <= 0:
         raise ContractError("media plan video duration must be positive")
     duration = _decimal(plan.video_duration_seconds)
@@ -581,6 +776,71 @@ def _run(arguments: list[str], label: str) -> None:
     raise ExportError(f"{label}: {detail}")
 
 
+def _validate_frame_pts(
+    executable: str, path: Path, expected: tuple[int, ...], last_duration_us: int
+) -> None:
+    command = [
+        executable,
+        "-hide_banner",
+        "-nostdin",
+        "-nostats",
+        "-xerror",
+        "-i",
+        str(path),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vf",
+        "settb=AVTB,showinfo",
+        "-fps_mode",
+        "passthrough",
+        "-f",
+        "null",
+        os.devnull,
+    ]
+    pattern = re.compile(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)")
+    count = 0
+    mismatch = None
+    detail = ""
+    try:
+        with subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        ) as process:
+            assert process.stderr is not None
+            for line in process.stderr:
+                detail = (detail + line)[-COMMAND_ERROR_LIMIT:]
+                match = pattern.search(line)
+                if match is None:
+                    continue
+                index, pts = map(int, match.groups())
+                if index != count or count >= len(expected) or pts != expected[count]:
+                    mismatch = (
+                        mismatch
+                        or f"frame {index} has an unexpected presentation timestamp"
+                    )
+                duration = re.search(r"\bduration:\s*(\d+)", line)
+                if count < len(expected):
+                    expected_duration = (
+                        expected[count + 1] - expected[count]
+                        if count + 1 < len(expected)
+                        else last_duration_us
+                    )
+                    if duration is None or int(duration[1]) != expected_duration:
+                        mismatch = (
+                            mismatch
+                            or f"frame {index} has an unexpected presentation duration"
+                        )
+                count += 1
+            status = process.wait()
+    except OSError as error:
+        raise ExportError(f"cannot validate frame timestamps: {error}") from error
+    if status != 0 or mismatch or count != len(expected):
+        raise ExportError(
+            mismatch
+            or f"frame timestamp verification failed ({count}/{len(expected)}): {detail}"
+        )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -591,6 +851,10 @@ def _sha256_file(path: Path) -> str:
 
 def _decimal(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
+
+
+def _frame_rate(value: float) -> str:
+    return str(Fraction(value).limit_denominator(1_000_000))
 
 
 def _emit(progress: Callable[[str], None] | None, message: str) -> None:

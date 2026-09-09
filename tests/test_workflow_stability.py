@@ -43,7 +43,7 @@ def test_batch_continues_after_bad_recording_and_retains_failure_details(
         def __init__(self, *args, **kwargs):
             pass
 
-        def export_session(self, source, session, output, progress):
+        def export_session(self, source, session, output, progress, options=None):
             calls.append(session.session_id)
             if session.session_id == "first":
                 raise ExportError("corrupt recording")
@@ -92,7 +92,7 @@ def test_batch_reconciles_removed_and_unavailable_selections(
         def list_sessions(self, source):
             return SESSION, unavailable
 
-        def export_session(self, source, session, output, progress):
+        def export_session(self, source, session, output, progress, options=None):
             return ExportedSession(
                 session.session_id, output / session.session_id, 1, 10
             )

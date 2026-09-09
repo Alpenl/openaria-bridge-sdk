@@ -37,6 +37,7 @@ from .models import (
     Source,
     SourceMode,
 )
+from .options import ExportOptions
 
 SERVICE_TYPE = "_ylx-capture._tcp.local."
 DEFAULT_DEVICE_API_PORT = 8080
@@ -225,6 +226,7 @@ class DeviceApiClient:
         session: SessionInfo,
         output_root: Path,
         progress: Callable[[str], None] | None = None,
+        options: ExportOptions | None = None,
     ) -> ExportedSession:
         if not session.exportable:
             raise ExportError(
@@ -243,6 +245,7 @@ class DeviceApiClient:
             manifest_bytes=manifest_bytes,
             artifact_writer=write_artifact,
             progress=progress,
+            options=options,
         )
 
     def delete_sessions(

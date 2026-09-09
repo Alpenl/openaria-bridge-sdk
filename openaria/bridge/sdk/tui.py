@@ -35,6 +35,7 @@ from textual.widgets.selection_list import Selection
 from ._history import ExportHistory
 from ._tui_widgets import (
     DeleteDialog,
+    ExportSettingsDialog,
     TextEntryDialog,
     duration,
     existing_parent,
@@ -47,6 +48,7 @@ from ._tui_widgets import (
 )
 from .client import OpenAriaSDK
 from .models import DeleteResult, ExportResult, SessionInfo, Source, SourceMode
+from .options import ExportOptions
 
 
 class SDKBackend(Protocol):
@@ -75,6 +77,7 @@ class SDKBackend(Protocol):
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
         continue_on_error: bool = False,
+        options: ExportOptions | None = None,
     ) -> ExportResult: ...
 
 
@@ -106,6 +109,7 @@ class OpenAriaTUI(App[None]):
         Binding("r", "rescan", "刷新"),
         Binding("a", "add_device", "连接", show=False),
         Binding("o", "choose_output", "目录", show=False),
+        Binding("p", "export_settings", "导出设置", show=False),
         Binding("l", "toggle_log", "记录"),
         Binding("q", "quit", "退出"),
         Binding("ctrl+q", "quit", "退出", show=False, priority=True),
@@ -139,6 +143,7 @@ class OpenAriaTUI(App[None]):
             )
         )
         self.theme = "openaria"
+        self.export_options = ExportOptions()
         self.export_root = (
             default_output or Path.home() / "OpenAria Exports"
         ).expanduser()
@@ -209,6 +214,13 @@ class OpenAriaTUI(App[None]):
                         flat=True,
                         compact=True,
                         tooltip="更改导出目录 (O)",
+                    )
+                    yield Button(
+                        "设置…",
+                        id="export-settings",
+                        flat=True,
+                        compact=True,
+                        tooltip="导出设置 (P)",
                     )
                 with Horizontal(id="export-row"):
                     yield Static("尚未选择录制", id="selection-summary", markup=False)
@@ -656,6 +668,21 @@ class OpenAriaTUI(App[None]):
             self._output_entered,
         )
 
+    @on(Button.Pressed, "#export-settings")
+    def action_export_settings(self) -> None:
+        if not self._exporting and not self._deleting:
+            self.push_screen(
+                ExportSettingsDialog(self.export_options), self._settings_selected
+            )
+
+    def _settings_selected(self, options: ExportOptions | None) -> None:
+        if options is not None:
+            self.export_options = options
+            self.notify(
+                f"{options.video_codec.upper()} · 音频延后 {options.audio_calibration_seconds * 1000:g} ms · "
+                + ("保留源媒体" if options.retain_sources else "仅保存成片")
+            )
+
     def _output_error(self, value: str) -> str | None:
         try:
             candidate = Path(value).expanduser().resolve()
@@ -743,6 +770,7 @@ class OpenAriaTUI(App[None]):
                 output=output,
                 progress=progress,
                 continue_on_error=True,
+                options=self.export_options,
             )
         except Exception as error:  # noqa: BLE001 - preserve selection for a retry
             self._status("导出失败 · 可重试", error=True)
@@ -900,6 +928,7 @@ class OpenAriaTUI(App[None]):
         if not self._sources:
             self._render_sources()
         self.query_one("#change-output").disabled = self._exporting or self._deleting
+        self.query_one("#export-settings").disabled = self._exporting or self._deleting
         self.query_one("#progress").display = self._exporting or self._deleting
         self.query_one("#export", Button).label = (
             "导出中…" if self._exporting else "导出成片"

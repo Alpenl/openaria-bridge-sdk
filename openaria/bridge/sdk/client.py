@@ -32,6 +32,7 @@ from .models import (
     Source,
     SourceMode,
 )
+from .options import ExportOptions
 
 
 class OpenAriaSDK:
@@ -188,6 +189,7 @@ class OpenAriaSDK:
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
         continue_on_error: bool = False,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Export a fresh inventory, optionally collecting per-recording failures.
 
@@ -264,12 +266,16 @@ class OpenAriaSDK:
             try:
                 if client is not None:
                     exported.append(
-                        client.export_session(selected, session, output_root, progress)
+                        client.export_session(
+                            selected, session, output_root, progress, options
+                        )
                     )
                 else:
                     assert inventory is not None
                     exported.append(
-                        export_card_session(inventory, session, output_root, progress)
+                        export_card_session(
+                            inventory, session, output_root, progress, options
+                        )
                     )
             except (OpenAriaError, OSError) as error:
                 if not continue_on_error:

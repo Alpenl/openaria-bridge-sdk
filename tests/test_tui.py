@@ -139,6 +139,7 @@ class FakeSDK:
         output: Path | str | None = None,
         progress=None,
         continue_on_error: bool = False,
+        options=None,
     ) -> ExportResult:
         assert source is not None
         assert session_ids is not None
@@ -150,6 +151,7 @@ class FakeSDK:
                 "session_ids": session_ids,
                 "output": output_root,
                 "continue_on_error": continue_on_error,
+                "options": options,
             }
         )
         if progress is not None:
@@ -1011,6 +1013,57 @@ def test_long_labels_and_resize_preserve_selection_and_control_bounds(
                     assert child.region.right <= dialog.region.right
                     assert child.region.bottom <= dialog.region.bottom
                 await pilot.press("escape")
+
+    asyncio.run(scenario())
+
+
+def test_export_settings_survive_workbench_actions_and_reach_batch(
+    tmp_path: Path,
+) -> None:
+    from textual.widgets import Checkbox
+
+    from openaria.bridge.sdk import ExportOptions
+    from openaria.bridge.sdk.tui import ExportSettingsDialog
+
+    async def scenario() -> None:
+        factory = FakeSDKFactory(tmp_path / "card")
+        app = OpenAriaTUI(default_output=tmp_path / "exports", sdk_factory=factory)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _wait_for(
+                pilot, lambda: len(app._sources) == 2 and not app._sessions_loading
+            )
+            await pilot.click("#export-settings")
+            await pilot.pause()
+            assert isinstance(app.screen, ExportSettingsDialog)
+            app.screen.query_one("#export-codec", Select).value = "hevc"
+            app.screen.query_one("#export-delay", Input).value = "30"
+            app.screen.query_one("#export-retain", Checkbox).value = True
+            await pilot.click("#settings-apply")
+            await pilot.pause()
+            expected = ExportOptions("hevc", 0.030, True)
+            assert app.export_options == expected
+            app._deleting = True
+            app._sync_controls()
+            app.action_export_settings()
+            assert not isinstance(app.screen, ExportSettingsDialog)
+            assert app.query_one("#export-settings").disabled
+            app._deleting = False
+            app._sync_controls()
+            await pilot.press("p")
+            await pilot.pause()
+            app.screen.query_one("#export-delay", Input).value = "1001"
+            await pilot.click("#settings-apply")
+            await pilot.pause()
+            assert isinstance(app.screen, ExportSettingsDialog)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.export_options == expected
+            app.action_export_selected()
+            await _wait_for(
+                pilot, lambda: bool(factory.export_calls) and not app._exporting
+            )
+            assert factory.export_calls[-1]["options"] == expected
+            assert factory.export_calls[-1]["continue_on_error"] is True
 
     asyncio.run(scenario())
 

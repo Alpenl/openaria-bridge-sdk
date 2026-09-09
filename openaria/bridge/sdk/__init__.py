@@ -27,6 +27,7 @@ from .models import (
     Source,
     SourceMode,
 )
+from .options import ExportOptions
 
 __all__ = [
     "ContractError",
@@ -36,6 +37,7 @@ __all__ = [
     "DiscoveryError",
     "ExportError",
     "ExportFailure",
+    "ExportOptions",
     "ExportResult",
     "ExportedSession",
     "MultipleSourcesError",
