@@ -60,6 +60,18 @@ class ExportedSession:
     media_bytes: int = 0
 
 
+
+
+
+
+@dataclasses.dataclass(frozen=True)
+class ExportFailure:
+    """One recording that could not be exported in a continuing batch."""
+
+    session_id: str
+    error: str
+
+
 @dataclasses.dataclass(frozen=True)
 class ExportResult:
     """Complete result of one high-level SDK export call."""
@@ -68,6 +80,7 @@ class ExportResult:
     output_root: Path
     sessions: tuple[ExportedSession, ...]
     unavailable_sessions: tuple[SessionInfo, ...] = ()
+    failed_sessions: tuple[ExportFailure, ...] = ()
 
     @property
     def exported_count(self) -> int:

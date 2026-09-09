@@ -32,6 +32,8 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -2259,12 +2261,16 @@ def read_sessions(
     registry: Any = None,
     external_device_identity: str | None = None,
     allow_unsigned: bool = False,
+    *,
+    on_error: Callable[[Path, Exception], None] | None = None,
 ) -> list[Session]:
     """Every published session on the card, oldest first.
 
     A directory without a publication manifest is skipped rather than guessed
     at: an interrupted capture leaves a partial tree behind, and inventing an
     inventory for it would mean uploading whatever happens to be on disk.
+    With ``on_error``, rejected directories are reported and independent valid
+    takes remain available. The default keeps strict, whole-card validation.
     """
     if recordings.is_symlink():
         raise PipelineError(f"recordings directory {recordings} must not be a symlink")
@@ -2278,57 +2284,121 @@ def read_sessions(
             f"{recordings} cannot be listed ({error.strerror}); is the card still inserted?"
         ) from error
     for directory in directories:
-        root_manifest_path = directory / "manifest.json"
-        if root_manifest_path.is_symlink():
-            print(f"  skip {directory.name}: root manifest is a symlink")
-            continue
-        if root_manifest_path.is_file():
-            manifest_bytes = _read_regular_file(
-                directory, Path("manifest.json"), "manifest.json"
-            )
-            manifest = parse_strict_json(manifest_bytes, "manifest.json")
-            sessions.append(
-                _dispatch_root_manifest(
-                    directory, root_manifest_path, manifest_bytes, manifest
-                )
-            )
-            continue
 
-        manifest_path = directory / "publication_manifest.json"
-        if manifest_path.is_symlink():
-            print(f"  skip {directory.name}: publication manifest is a symlink")
-            continue
-        if not manifest_path.is_file():
-            print(
-                f"  skip {directory.name}: no publication manifest (capture never finished)"
+        def report_skip(reason: str, current: Path = directory) -> None:
+            if on_error is None:
+                print(f"  skip {current.name}: {reason}")
+            else:
+                on_error(current, PipelineError(reason))
+
+        try:
+            session = _read_session_directory(
+                directory,
+                registry,
+                external_device_identity,
+                allow_unsigned,
+                report_skip,
             )
-            continue
-        manifest_bytes = _read_regular_file(
-            directory, Path("publication_manifest.json"), "publication_manifest.json"
-        )
-        manifest = parse_strict_json(manifest_bytes, "publication_manifest.json")
-        if not isinstance(manifest, dict):
-            raise PipelineError("publication_manifest.json must be an object")
-        if not manifest.get("integrity_ok"):
-            print(
-                f"  skip {directory.name}: the card marks this publication as not intact"
-            )
-            continue
-        sessions.append(
-            _session_from_publication_manifest(
-                directory=directory,
-                source_directory_name=directory.name,
-                manifest_path=manifest_path,
-                manifest_bytes=manifest_bytes,
-                manifest=manifest,
-                registry=registry,
-                external_device_identity=external_device_identity,
-                allow_unsigned=allow_unsigned,
-                check_source_signature=True,
-            )
-        )
-    _validate_closed_device_session_take_graph(sessions)
+        except (PipelineError, OSError) as error:
+            if on_error is None:
+                raise
+            on_error(directory, error)
+        else:
+            if session is not None:
+                sessions.append(session)
+    if on_error is None:
+        _validate_closed_device_session_take_graph(sessions)
+    else:
+        sessions = _readable_session_takes(sessions, on_error)
     return sorted(sessions, key=_oldest_first_session_key)
+
+
+def _read_session_directory(
+    directory: Path,
+    registry: Any,
+    external_device_identity: str | None,
+    allow_unsigned: bool,
+    report_skip: Callable[[str], None],
+) -> Session | None:
+    root_manifest_path = directory / "manifest.json"
+    if root_manifest_path.is_symlink():
+        report_skip("root manifest is a symlink")
+        return None
+    if root_manifest_path.is_file():
+        manifest_bytes = _read_regular_file(
+            directory, Path("manifest.json"), "manifest.json"
+        )
+        manifest = parse_strict_json(manifest_bytes, "manifest.json")
+        return _dispatch_root_manifest(
+            directory, root_manifest_path, manifest_bytes, manifest
+        )
+
+    manifest_path = directory / "publication_manifest.json"
+    if manifest_path.is_symlink():
+        report_skip("publication manifest is a symlink")
+        return None
+    if not manifest_path.is_file():
+        report_skip("no publication manifest (capture never finished)")
+        return None
+    manifest_bytes = _read_regular_file(
+        directory, Path("publication_manifest.json"), "publication_manifest.json"
+    )
+    manifest = parse_strict_json(manifest_bytes, "publication_manifest.json")
+    if not isinstance(manifest, dict):
+        raise PipelineError("publication_manifest.json must be an object")
+    if not manifest.get("integrity_ok"):
+        report_skip("the card marks this publication as not intact")
+        return None
+    return _session_from_publication_manifest(
+        directory=directory,
+        source_directory_name=directory.name,
+        manifest_path=manifest_path,
+        manifest_bytes=manifest_bytes,
+        manifest=manifest,
+        registry=registry,
+        external_device_identity=external_device_identity,
+        allow_unsigned=allow_unsigned,
+        check_source_signature=True,
+    )
+
+
+def _readable_session_takes(
+    sessions: list[Session], on_error: Callable[[Path, Exception], None]
+) -> list[Session]:
+    device_sessions = [
+        session
+        for session in sessions
+        if session.source_manifest_schema
+        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA}
+    ]
+    readable = [
+        session
+        for session in sessions
+        if session.source_manifest_schema
+        not in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA}
+    ]
+    session_ids = Counter(session.session_id for session in device_sessions)
+    manifest_ids = Counter(session.manifest_id for session in device_sessions)
+    by_take: dict[str, list[Session]] = {}
+    for session in device_sessions:
+        by_take.setdefault(session.take["take_id"], []).append(session)
+    for members in by_take.values():
+        try:
+            for session in members:
+                if (
+                    session_ids[session.session_id] > 1
+                    or manifest_ids[session.manifest_id] > 1
+                ):
+                    raise PipelineError(
+                        "take graph rejection: duplicate session_id or manifest_id"
+                    )
+            _validate_closed_device_session_take_graph(members)
+        except PipelineError as error:
+            for session in members:
+                on_error(session.directory, error)
+        else:
+            readable.extend(members)
+    return readable
 
 
 # --------------------------------------------------------------------------

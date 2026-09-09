@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import socket
 import sys
 import threading
@@ -19,6 +20,7 @@ import main as legacy_main
 import openaria.bridge.sdk._export as export_module
 from openaria.bridge.sdk import (
     ContractError,
+    DiscoveryError,
     ExportError,
     OpenAriaSDK,
     SessionInfo,
@@ -132,6 +134,8 @@ def test_modified_final_video_is_never_reused(tmp_path: Path) -> None:
 
     with pytest.raises(ExportError, match="destination already exists"):
         sdk.export()
+
+
 
 
 def test_card_mode_explicit_path_and_export_override(tmp_path: Path) -> None:
@@ -300,11 +304,13 @@ def test_lan_mode_discovers_probes_and_downloads_without_network_mutation_field(
 def test_lan_digest_mismatch_leaves_no_partial_session(tmp_path: Path) -> None:
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
+    requests: list[str] = []
     with _device_api(
         manifest_bytes,
         payloads,
         artifact_ids,
         corrupt_first_artifact=True,
+        requests=requests,
     ) as endpoint:
         output = tmp_path / "bad-export"
         sdk = OpenAriaSDK(mode="lan", endpoint=endpoint, output=output)
@@ -315,6 +321,8 @@ def test_lan_digest_mismatch_leaves_no_partial_session(tmp_path: Path) -> None:
     assert not (output / DEVICE_LABEL / SESSION_ID).exists()
     device_root = output / DEVICE_LABEL
     assert not device_root.exists() or not tuple(device_root.glob("*.part"))
+    artifact_requests = [path for path in requests if "/artifacts/" in path]
+    assert len(artifact_requests) == len(set(artifact_requests))
 
 
 def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) -> None:
@@ -343,16 +351,19 @@ def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) ->
 def test_lan_pagination_rejects_catalog_revision_change(tmp_path: Path) -> None:
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
+    requests = []
     with _device_api(
         manifest_bytes,
         payloads,
         artifact_ids,
         change_catalog_on_next_page=True,
+        requests=requests,
     ) as endpoint:
         sdk = OpenAriaSDK(mode="lan", endpoint=endpoint)
         source = sdk.discover()[0]
         with pytest.raises(ContractError, match="catalog_revision changed"):
             sdk.list_sessions(source)
+    assert requests.count("/api/v4/sessions") == 6
 
 
 @pytest.mark.parametrize("path", ("../outside.mp4", "folder\\outside.mp4"))
@@ -505,6 +516,8 @@ def _device_api(
     corrupt_first_artifact: bool = False,
     verification_verdict: str = "usable",
     change_catalog_on_next_page: bool = False,
+    failures: dict[str, list[int | str]] | None = None,
+    requests: list[str] | None = None,
 ) -> Iterator[str]:
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     id_to_payload = {artifact_ids[path]: payload for path, payload in payloads.items()}
@@ -530,6 +543,17 @@ def _device_api(
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
+            if requests is not None:
+                requests.append(parsed.path)
+            faults = (failures or {}).get(parsed.path, [])
+            fault = faults.pop(0) if faults else None
+            self.truncate = fault == "truncate"
+            if isinstance(fault, int):
+                self.send_error(fault)
+                return
+            if fault == "disconnect":
+                self.close_connection = True
+                return
             if parsed.path == "/api/v4/device":
                 self._json(
                     {
@@ -602,7 +626,7 @@ def _device_api(
                 self.send_header("YLX-Manifest-SHA256", manifest_sha256)
                 self.send_header("ETag", f'"{manifest_sha256}"')
                 self.end_headers()
-                self.wfile.write(manifest_bytes)
+                self._body(manifest_bytes)
                 return
             prefix = f"/api/v4/sessions/{SESSION_ID}/artifacts/"
             if parsed.path.startswith(prefix):
@@ -620,7 +644,7 @@ def _device_api(
                     self.send_header("Content-Length", str(len(payload)))
                     self.send_header("ETag", f'"{expected_sha}"')
                     self.end_headers()
-                    self.wfile.write(payload)
+                    self._body(payload)
                     return
             self.send_error(404)
 
@@ -630,7 +654,12 @@ def _device_api(
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
-            self.wfile.write(raw)
+            self._body(raw)
+
+        def _body(self, raw: bytes) -> None:
+            self.wfile.write(raw[:1] if self.truncate else raw)
+            if self.truncate:
+                self.close_connection = True
 
         def log_message(self, format: str, *args: Any) -> None:
             return None
@@ -645,3 +674,160 @@ def _device_api(
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_card_refresh_rereads_inventory_and_drops_removed_sessions(
+    tmp_path: Path,
+) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    sdk = OpenAriaSDK(mode="card", card=card)
+    source = sdk.discover()[0]
+    assert sdk.list_sessions(source)
+    shutil.rmtree(card / "recordings" / SESSION_ID)
+    assert sdk.list_sessions(source, refresh=True) == ()
+
+
+def test_card_refresh_finds_first_recording_on_previously_empty_card(
+    tmp_path: Path,
+) -> None:
+    card = tmp_path / "card"
+    (card / "recordings").mkdir(parents=True)
+    (card / "device-id").write_text("30D5872D\n", encoding="utf-8")
+    sdk = OpenAriaSDK(mode="card", card=card)
+    source = sdk.discover()[0]
+    assert sdk.list_sessions(source) == ()
+    _build_card(card)
+    assert [item.session_id for item in sdk.list_sessions(source, refresh=True)] == [
+        SESSION_ID
+    ]
+
+
+def test_failed_discovery_refresh_never_returns_old_sources(tmp_path: Path) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    sdk = OpenAriaSDK(mode="card", card=card)
+    assert sdk.discover()
+    shutil.rmtree(card)
+    with pytest.raises(DiscoveryError):
+        sdk.discover(refresh=True)
+    with pytest.raises(DiscoveryError):
+        sdk.discover()
+
+
+@pytest.mark.parametrize("broken_name", ["broken-capture", SESSION_ID])
+def test_bad_card_manifest_is_visible_without_hiding_healthy_recordings(
+    tmp_path: Path,
+    broken_name: str,
+) -> None:
+    card = tmp_path / "card"
+    _build_card(card)
+    (card / "recordings" / SESSION_ID).rename(card / "recordings" / "healthy-directory")
+    broken = card / "recordings" / broken_name
+    broken.mkdir()
+    (broken / "manifest.json").write_text("{interrupted", encoding="utf-8")
+    sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
+    sessions = sdk.list_sessions()
+    assert {item.session_id for item in sessions if item.exportable} == {SESSION_ID}
+    rejected = next(item for item in sessions if not item.exportable)
+    assert rejected.display_name == broken_name
+    assert len({item.session_id for item in sessions}) == len(sessions)
+    assert rejected.unavailable_reason
+    assert sdk.export().exported_count == 1
+    with pytest.raises(legacy_main.PipelineError):
+        legacy_main.read_sessions(card / "recordings", allow_unsigned=True)
+
+
+def test_lan_transient_http_and_truncated_download_recover(tmp_path: Path) -> None:
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "card")
+    artifact_path = f"/api/v4/sessions/{SESSION_ID}/artifacts/{artifact_ids['video/left_00000.mp4']}"
+    requests = []
+    with _device_api(
+        manifest,
+        payloads,
+        artifact_ids,
+        failures={"/api/v4/device": [503], artifact_path: ["truncate"]},
+        requests=requests,
+    ) as endpoint:
+        result = OpenAriaSDK(endpoint=endpoint, output=tmp_path / "exports").export()
+    assert result.exported_count == 1
+    assert requests.count("/api/v4/device") == 2
+    assert requests.count(artifact_path) == 2
+    assert not list((tmp_path / "exports").rglob("*.part"))
+
+
+def test_lan_permanent_http_failure_does_not_retry(tmp_path: Path) -> None:
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "card")
+    requests = []
+    with (
+        _device_api(
+            manifest,
+            payloads,
+            artifact_ids,
+            failures={"/api/v4/device": [401, 401, 401]},
+            requests=requests,
+        ) as endpoint,
+        pytest.raises(DiscoveryError, match="HTTP 401"),
+    ):
+        OpenAriaSDK(endpoint=endpoint).discover()
+    assert requests.count("/api/v4/device") == 1
+
+
+@pytest.mark.parametrize("path", ["device", "sessions", f"sessions/{SESSION_ID}"])
+@pytest.mark.parametrize("failure", ["truncate", "disconnect"])
+def test_lan_metadata_transport_failures_recover(
+    tmp_path: Path, path: str, failure: str
+) -> None:
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "card")
+    requests = []
+    with _device_api(
+        manifest,
+        payloads,
+        artifact_ids,
+        failures={f"/api/v4/{path}": [failure]},
+        requests=requests,
+    ) as endpoint:
+        result = OpenAriaSDK(endpoint=endpoint, output=tmp_path / "exports").export()
+    assert result.exported_count == 1
+    assert requests.count(f"/api/v4/{path}") == 2
+
+
+def test_exhausted_download_retries_clean_up_and_allow_a_new_export(
+    tmp_path: Path,
+) -> None:
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "card")
+    path = f"/api/v4/sessions/{SESSION_ID}/artifacts/{artifact_ids['video/left_00000.mp4']}"
+    requests = []
+    output = tmp_path / "exports"
+    with _device_api(
+        manifest,
+        payloads,
+        artifact_ids,
+        failures={path: ["truncate"] * 3},
+        requests=requests,
+    ) as endpoint:
+        sdk = OpenAriaSDK(endpoint=endpoint, output=output)
+        with pytest.raises(DiscoveryError, match="interrupted"):
+            sdk.export()
+        assert requests.count(path) == 3
+        assert not (output / DEVICE_LABEL / SESSION_ID).exists()
+        assert not list(output.rglob("*.part"))
+        assert sdk.export().exported_count == 1
+        assert requests.count(path) == 4
+
+
+def test_artifact_download_never_removes_a_preexisting_target(tmp_path: Path) -> None:
+    from openaria.bridge.sdk._lan import DeviceApiClient
+
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "card")
+    artifact = artifacts_from_manifest(manifest, SESSION_ID)[0]
+    destination = tmp_path / "existing-file"
+    destination.write_bytes(b"keep this file")
+    requests = []
+    with (
+        _device_api(manifest, payloads, artifact_ids, requests=requests) as endpoint,
+        pytest.raises(FileExistsError),
+    ):
+        DeviceApiClient(endpoint)._download_artifact(SESSION_ID, artifact, destination)
+    assert destination.read_bytes() == b"keep this file"
+    assert len(requests) == 1

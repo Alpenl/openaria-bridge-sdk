@@ -228,21 +228,19 @@ def render_session_video(
             "FFmpeg could not create the final recording",
         )
         _validate_media(executable, staged_output, expect_audio=plan.has_audio)
+        size_bytes = staged_output.stat().st_size
+        if size_bytes <= 0:
+            raise ExportError("FFmpeg created an empty final recording")
+        digest = _sha256_file(staged_output)
+        output_frames, _ = _count_frames_and_seconds(staged_output)
+        if output_frames != source_frames:
+            raise ExportError(
+                "final recording frame count changed during rendering: "
+                f"expected {source_frames}, got {output_frames}"
+            )
+        _emit(progress, f"成片校验完成（{size_bytes} 字节）")
         os.replace(staged_output, output)
 
-    size_bytes = output.stat().st_size
-    if size_bytes <= 0:
-        output.unlink(missing_ok=True)
-        raise ExportError("FFmpeg created an empty final recording")
-    digest = _sha256_file(output)
-    output_frames, _ = _count_frames_and_seconds(output)
-    if output_frames != source_frames:
-        output.unlink(missing_ok=True)
-        raise ExportError(
-            "final recording frame count changed during rendering: "
-            f"expected {source_frames}, got {output_frames}"
-        )
-    _emit(progress, f"成片校验完成（{size_bytes} 字节）")
     return RenderedMedia(
         path=output,
         size_bytes=size_bytes,

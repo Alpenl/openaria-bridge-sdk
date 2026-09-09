@@ -14,7 +14,12 @@ import main as legacy
 
 from ._export import ArtifactDescriptor, export_session_tree
 from .errors import ContractError, DiscoveryError, ExportError
-from .models import ExportedSession, SessionInfo, Source, SourceMode
+from .models import (
+    ExportedSession,
+    SessionInfo,
+    Source,
+    SourceMode,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,7 +130,25 @@ def export_card_session(
 
 def _read_inventory(root: Path) -> CardInventory:
     recordings = legacy.find_recordings_dir(root)
-    sessions = tuple(legacy.read_sessions(recordings, allow_unsigned=True))
+    rejected: list[SessionInfo] = []
+
+    def on_error(directory: Path, error: Exception) -> None:
+        rejected.append(
+            SessionInfo(
+                session_id=f"unavailable/{directory.name}",
+                display_name=directory.name,
+                started_at="",
+                duration_seconds=0,
+                total_bytes=0,
+                manifest_sha256="",
+                exportable=False,
+                unavailable_reason=str(error),
+            )
+        )
+
+    sessions = tuple(
+        legacy.read_sessions(recordings, allow_unsigned=True, on_error=on_error)
+    )
     marker = legacy.device_id_of(root)
     first = sessions[0] if sessions else None
     device = (
@@ -158,7 +181,11 @@ def _read_inventory(root: Path) -> CardInventory:
         )
         for session in sessions
     )
-    return CardInventory(source=source, sessions=sessions, session_infos=infos)
+    return CardInventory(
+        source=source, sessions=sessions, session_infos=infos + tuple(rejected)
+    )
+
+
 
 
 def _system_mount_roots() -> tuple[Path, ...]:

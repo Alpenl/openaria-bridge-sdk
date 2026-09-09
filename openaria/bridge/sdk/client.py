@@ -3,17 +3,32 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
-from ._card import CardInventory, discover_card_inventories, export_card_session
+from ._card import (
+    CardInventory,
+    discover_card_inventories,
+    export_card_session,
+)
 from ._lan import (
     DeviceApiClient,
     discover_mdns_endpoints,
     probe_lan_sources,
 )
-from .errors import DiscoveryError, ExportError, MultipleSourcesError
-from .models import ExportResult, SessionInfo, Source, SourceMode
+from .errors import (
+    DiscoveryError,
+    ExportError,
+    MultipleSourcesError,
+    OpenAriaError,
+)
+from .models import (
+    ExportFailure,
+    ExportResult,
+    SessionInfo,
+    Source,
+    SourceMode,
+)
 
 
 class OpenAriaSDK:
@@ -62,13 +77,15 @@ class OpenAriaSDK:
         self._discovery_provider = discovery_provider or discover_mdns_endpoints
         self._sources: tuple[Source, ...] | None = None
         self._card_inventories: dict[str, CardInventory] = {}
-        self._session_cache: dict[str, tuple[SessionInfo, ...]] = {}
+        self._session_cache: dict[tuple[str, str, str], tuple[SessionInfo, ...]] = {}
 
     def discover(self, *, refresh: bool = False) -> tuple[Source, ...]:
         """Return every usable source found for the selected mode."""
 
         if self._sources is not None and not refresh:
             return self._sources
+        self._sources = None
+        self._card_inventories.clear()
         self._session_cache.clear()
         if self.mode is SourceMode.LAN:
             endpoints = (
@@ -136,8 +153,10 @@ class OpenAriaSDK:
         """List sealed sessions and preserve any gateway-unavailable entries."""
 
         selected = self.select_source(source)
-        if selected.location in self._session_cache and not refresh:
-            return self._session_cache[selected.location]
+        cache_key = (selected.location, selected.device_id, selected.device_label)
+        if cache_key in self._session_cache and not refresh:
+            return self._session_cache[cache_key]
+        self._session_cache.pop(cache_key, None)
         if selected.mode is SourceMode.LAN:
             client = DeviceApiClient(
                 selected.api_base or selected.location,
@@ -146,14 +165,16 @@ class OpenAriaSDK:
             )
             sessions = client.list_sessions(selected)
         else:
+            if refresh:
+                self._card_inventories.pop(selected.location, None)
             inventory = self._card_inventories.get(selected.location)
             if inventory is None:
-                self.discover(refresh=True)
-                inventory = self._card_inventories.get(selected.location)
-            if inventory is None:
-                raise DiscoveryError(f"recording card disappeared: {selected.location}")
+                inventory = discover_card_inventories(
+                    card=selected.card_root or Path(selected.location)
+                )[0]
+                self._card_inventories[selected.location] = inventory
             sessions = inventory.session_infos
-        self._session_cache[selected.location] = sessions
+        self._session_cache[cache_key] = sessions
         return sessions
 
     def export(
@@ -163,17 +184,28 @@ class OpenAriaSDK:
         session_ids: Iterable[str] | None = None,
         output: Path | str | None = None,
         progress: Callable[[str], None] | None = None,
+        continue_on_error: bool = False,
     ) -> ExportResult:
-        """Discover, verify, render, and atomically export finished recordings."""
+        """Export a fresh inventory, optionally collecting per-recording failures.
+
+        Source discovery and catalog errors always raise. By default the first
+        recording error also raises; ``continue_on_error`` returns these errors
+        in ``failed_sessions`` while attempting the remaining recordings.
+        """
 
         selected = self.select_source(source)
-        sessions = self.list_sessions(selected)
+        sessions = self.list_sessions(selected, refresh=True)
         requested = set(session_ids) if session_ids is not None else None
         by_id = {session.session_id: session for session in sessions}
+        failures: list[ExportFailure] = []
         if requested is not None:
             unknown = sorted(requested - by_id.keys())
-            if unknown:
+            if unknown and not continue_on_error:
                 raise ExportError("unknown session id(s): " + ", ".join(unknown))
+            failures.extend(
+                ExportFailure(session_id, "recording no longer exists on the source")
+                for session_id in unknown
+            )
         chosen = tuple(
             session
             for session in sessions
@@ -191,22 +223,28 @@ class OpenAriaSDK:
                 f"{session.session_id} ({session.unavailable_reason})"
                 for session in unavailable
             )
-            raise ExportError(f"requested session(s) are not exportable: {detail}")
+            if not continue_on_error:
+                raise ExportError(f"requested session(s) are not exportable: {detail}")
+            failures.extend(
+                ExportFailure(
+                    session.session_id,
+                    session.unavailable_reason or "recording is not exportable",
+                )
+                for session in unavailable
+            )
 
         output_root = (
             self.output if output is None else Path(output).expanduser()
         ).resolve()
         exported = []
+        client = None
+        inventory = None
         if selected.mode is SourceMode.LAN:
             client = DeviceApiClient(
                 selected.api_base or selected.location,
                 timeout=self.request_timeout,
                 token=self.token,
             )
-            for session in chosen:
-                exported.append(
-                    client.export_session(selected, session, output_root, progress)
-                )
         else:
             inventory = self._card_inventories.get(selected.location)
             if inventory is None:
@@ -219,21 +257,29 @@ class OpenAriaSDK:
                     "card-mode output must be outside the source recording card: "
                     f"{output_root}"
                 )
-            for session in chosen:
-                exported.append(
-                    export_card_session(
-                        inventory,
-                        session,
-                        output_root,
-                        progress,
+        for session in chosen:
+            try:
+                if client is not None:
+                    exported.append(
+                        client.export_session(selected, session, output_root, progress)
                     )
-                )
+                else:
+                    assert inventory is not None
+                    exported.append(
+                        export_card_session(inventory, session, output_root, progress)
+                    )
+            except (OpenAriaError, OSError) as error:
+                if not continue_on_error:
+                    raise
+                failures.append(ExportFailure(session.session_id, str(error)))
         return ExportResult(
             source=selected,
             output_root=output_root,
             sessions=tuple(exported),
             unavailable_sessions=unavailable,
+            failed_sessions=tuple(failures),
         )
+
 
     @staticmethod
     def _service_description() -> str:

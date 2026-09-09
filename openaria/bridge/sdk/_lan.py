@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +26,12 @@ from ._export import (
 )
 from ._json import load_json
 from .errors import ContractError, DiscoveryError, ExportError
-from .models import ExportedSession, SessionInfo, Source, SourceMode
+from .models import (
+    ExportedSession,
+    SessionInfo,
+    Source,
+    SourceMode,
+)
 
 SERVICE_TYPE = "_ylx-capture._tcp.local."
 DEFAULT_DEVICE_API_PORT = 8080
@@ -32,6 +40,29 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_ERROR_BYTES = 4096
 MAX_SESSIONS = 10_000
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_REQUEST_ATTEMPTS = 3
+MAX_PROBE_WORKERS = 8
+PROBE_TIMEOUT = 3.0
+RETRYABLE_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
+
+class _RetryableRequestError(DiscoveryError):
+    """A read-only request may succeed after a transient transport failure."""
+
+
+class _CatalogChangedError(ContractError):
+    """Pagination must restart to avoid mixing different catalog snapshots."""
+
+
+def _retry_request[T](operation: Callable[[], T]) -> T:
+    for attempt in range(MAX_REQUEST_ATTEMPTS):
+        try:
+            return operation()
+        except _RetryableRequestError:
+            if attempt == MAX_REQUEST_ATTEMPTS - 1:
+                raise
+            time.sleep(0.15 * 2**attempt)
+    raise AssertionError("unreachable retry state")
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -102,6 +133,16 @@ class DeviceApiClient:
         )
 
     def list_sessions(self, source: Source) -> tuple[SessionInfo, ...]:
+        for attempt in range(MAX_REQUEST_ATTEMPTS):
+            try:
+                return self._list_sessions_once(source)
+            except _CatalogChangedError:
+                if attempt == MAX_REQUEST_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.15 * 2**attempt)
+        raise AssertionError("unreachable catalog retry state")
+
+    def _list_sessions_once(self, source: Source) -> tuple[SessionInfo, ...]:
         cursor: str | None = None
         seen_cursors: set[str] = set()
         seen_sessions: set[str] = set()
@@ -134,7 +175,7 @@ class DeviceApiClient:
                 if catalog_revision is None:
                     catalog_revision = revision
                 elif revision != catalog_revision:
-                    raise ContractError(
+                    raise _CatalogChangedError(
                         "Device API v4 catalog_revision changed during pagination"
                     )
             items = page.get("items")
@@ -199,15 +240,23 @@ class DeviceApiClient:
             progress=progress,
         )
 
+
     def _manifest(self, session: SessionInfo) -> bytes:
         safe_segment(session.session_id, "session_id")
-        response = self._open(f"sessions/{_quote_segment(session.session_id)}")
-        try:
-            raw = _read_limited(response, MAX_MANIFEST_BYTES, "Device Session manifest")
-            declared = _single_header(response.headers, "YLX-Manifest-SHA256")
-            etag = _single_header(response.headers, "ETag")
-        finally:
-            response.close()
+
+        def read() -> tuple[bytes, str | None, str | None]:
+            response = self._open(f"sessions/{_quote_segment(session.session_id)}")
+            try:
+                raw = _read_limited(
+                    response, MAX_MANIFEST_BYTES, "Device Session manifest"
+                )
+                declared = _single_header(response.headers, "YLX-Manifest-SHA256")
+                etag = _single_header(response.headers, "ETag")
+                return raw, declared, etag
+            finally:
+                response.close()
+
+        raw, declared, etag = _retry_request(read)
         if declared is None or not SHA256_RE.fullmatch(declared):
             raise ContractError(
                 "Device API v4 manifest omitted a valid YLX-Manifest-SHA256"
@@ -233,11 +282,22 @@ class DeviceApiClient:
         artifact: ArtifactDescriptor,
         destination: Path,
     ) -> None:
+        _retry_request(
+            lambda: self._download_artifact_once(session_id, artifact, destination)
+        )
+
+    def _download_artifact_once(
+        self,
+        session_id: str,
+        artifact: ArtifactDescriptor,
+        destination: Path,
+    ) -> None:
         path = (
             f"sessions/{_quote_segment(session_id)}/artifacts/"
             f"{_quote_segment(artifact.artifact_id)}"
         )
         response = self._open(path)
+        created = False
         try:
             content_length = _content_length(response.headers)
             if content_length != artifact.size_bytes:
@@ -259,28 +319,33 @@ class DeviceApiClient:
                 )
             digest = hashlib.sha256()
             received = 0
-            try:
-                with destination.open("xb") as handle:
-                    while chunk := response.read(DOWNLOAD_CHUNK_BYTES):
-                        received += len(chunk)
-                        if received > artifact.size_bytes:
-                            raise ExportError(
-                                f"artifact {artifact.path} exceeded its declared size"
-                            )
-                        digest.update(chunk)
-                        handle.write(chunk)
-            except Exception:
+            with destination.open("xb") as handle:
+                created = True
+                while chunk := _read_response(
+                    response, DOWNLOAD_CHUNK_BYTES, artifact.path
+                ):
+                    received += len(chunk)
+                    if received > artifact.size_bytes:
+                        raise ExportError(
+                            f"artifact {artifact.path} exceeded its declared size"
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+            if received != artifact.size_bytes:
+                raise _RetryableRequestError(
+                    f"artifact {artifact.path} download was interrupted: "
+                    f"expected {artifact.size_bytes} bytes, received {received}"
+                )
+            if not hmac.compare_digest(digest.hexdigest(), artifact.sha256):
+                raise ExportError(
+                    f"artifact {artifact.path} failed size/SHA-256 verification"
+                )
+        except Exception:
+            if created:
                 destination.unlink(missing_ok=True)
-                raise
+            raise
         finally:
             response.close()
-        if received != artifact.size_bytes or not hmac.compare_digest(
-            digest.hexdigest(), artifact.sha256
-        ):
-            destination.unlink(missing_ok=True)
-            raise ExportError(
-                f"artifact {artifact.path} failed size/SHA-256 verification"
-            )
 
     def _json_get(
         self,
@@ -289,42 +354,72 @@ class DeviceApiClient:
         query: dict[str, str] | None = None,
         label: str,
     ) -> Any:
-        response = self._open(path, query=query)
-        try:
-            raw = _read_limited(response, MAX_JSON_BYTES, label)
-        finally:
-            response.close()
-        return load_json(raw, label)
+        def read() -> bytes:
+            response = self._open(path, query=query)
+            try:
+                return _read_limited(response, MAX_JSON_BYTES, label)
+            finally:
+                response.close()
 
-    def _open(self, path: str, *, query: dict[str, str] | None = None) -> Any:
+        return load_json(_retry_request(read), label)
+
+    def _open(
+        self,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        method: str = "GET",
+        data: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         url = f"{self.api_base}/{path.lstrip('/')}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
-        headers = {
+        request_headers = {
             "Accept": "application/json, application/octet-stream;q=0.9",
             "User-Agent": "openaria-bridge-sdk/0.2",
         }
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(url, headers=headers, method="GET")
+            request_headers["Authorization"] = f"Bearer {self.token}"
+        request_headers.update(headers or {})
+        request = urllib.request.Request(
+            url, headers=request_headers, method=method, data=data
+        )
         try:
             response = self._opener.open(request, timeout=self.timeout)
         except urllib.error.HTTPError as error:
-            detail = (
-                error.read(MAX_ERROR_BYTES).decode("utf-8", errors="replace").strip()
+            try:
+                detail = (
+                    error.read(MAX_ERROR_BYTES)
+                    .decode("utf-8", errors="replace")
+                    .strip()
+                )
+            except (http.client.HTTPException, OSError):
+                detail = str(error.reason)
+            finally:
+                error.close()
+            error_type = (
+                _RetryableRequestError
+                if error.code in RETRYABLE_HTTP_CODES
+                else DiscoveryError
             )
-            raise DiscoveryError(
+            raise error_type(
                 f"Device API request failed with HTTP {error.code}: {detail or error.reason}"
             ) from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
             reason = getattr(error, "reason", error)
-            raise DiscoveryError(
+            raise _RetryableRequestError(
                 f"cannot reach Device API at {self.api_base}: {reason}"
             ) from error
         status = getattr(response, "status", response.getcode())
         if status != 200:
             response.close()
-            raise DiscoveryError(f"Device API returned unexpected HTTP {status}")
+            error_type = (
+                _RetryableRequestError
+                if status in RETRYABLE_HTTP_CODES
+                else DiscoveryError
+            )
+            raise error_type(f"Device API returned unexpected HTTP {status}")
         return response
 
 
@@ -394,13 +489,24 @@ def probe_lan_sources(
 ) -> tuple[Source, ...]:
     sources_by_device: dict[str, Source] = {}
     errors: list[str] = []
-    for endpoint in endpoints:
-        try:
-            source = DeviceApiClient(endpoint, timeout=timeout, token=token).probe()
-        except (DiscoveryError, ContractError, ValueError) as error:
-            errors.append(f"{endpoint}: {error}")
-            continue
-        sources_by_device.setdefault(source.device_id, source)
+    endpoints = tuple(dict.fromkeys(endpoints))
+
+    def probe(endpoint: str) -> Source:
+        return DeviceApiClient(
+            endpoint, timeout=min(timeout, PROBE_TIMEOUT), token=token
+        ).probe()
+
+    # Discovery has a shorter socket budget than potentially large downloads.
+    with ThreadPoolExecutor(max_workers=MAX_PROBE_WORKERS) as executor:
+        probes = {executor.submit(probe, endpoint): endpoint for endpoint in endpoints}
+        for future in as_completed(probes):
+            endpoint = probes[future]
+            try:
+                source = future.result()
+            except (DiscoveryError, ContractError, ValueError) as error:
+                errors.append(f"{endpoint}: {error}")
+                continue
+            sources_by_device.setdefault(source.device_id, source)
     if not sources_by_device:
         suffix = f" ({'; '.join(errors)})" if errors else ""
         raise DiscoveryError(f"no usable Open Aria Device API v4 device found{suffix}")
@@ -508,12 +614,32 @@ def _read_limited(response: Any, maximum: int, label: str) -> bytes:
     declared = _content_length(response.headers, required=False)
     if declared is not None and declared > maximum:
         raise ContractError(f"{label} exceeds the {maximum}-byte limit")
-    raw = response.read(maximum + 1)
+    raw = bytearray()
+    while len(raw) <= maximum:
+        chunk = _read_response(
+            response, min(DOWNLOAD_CHUNK_BYTES, maximum + 1 - len(raw)), label
+        )
+        if not chunk:
+            break
+        raw.extend(chunk)
     if len(raw) > maximum:
         raise ContractError(f"{label} exceeds the {maximum}-byte limit")
+    if declared is not None and len(raw) < declared:
+        raise _RetryableRequestError(
+            f"{label} download was interrupted before Content-Length"
+        )
     if declared is not None and len(raw) != declared:
         raise ContractError(f"{label} Content-Length does not match its body")
-    return raw
+    return bytes(raw)
+
+
+def _read_response(response: Any, size: int, label: str) -> bytes:
+    try:
+        return response.read(size)
+    except (http.client.HTTPException, OSError) as error:
+        raise _RetryableRequestError(
+            f"{label} download was interrupted: {error}"
+        ) from error
 
 
 def _single_header(headers: Any, name: str) -> str | None:

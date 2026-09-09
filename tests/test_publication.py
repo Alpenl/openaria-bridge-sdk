@@ -1373,6 +1373,48 @@ def test_read_sessions_accepts_current_central_closed_take_corpus(
 
 
 @pytest.mark.parametrize(
+    "failure", ["missing-predecessor", "duplicate-id", "invalid-manifest"]
+)
+def test_tolerant_card_inventory_isolates_invalid_takes(
+    tmp_path: Path, failure: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    recordings = tmp_path / "recordings"
+    healthy = load_contract_fixture(
+        "valid/ylx-device-session-v2.audio-not-recorded.json"
+    )
+    write_contract_manifest(recordings, "healthy", healthy)
+    predecessor = load_contract_fixture("valid/ylx-device-session-v1.json")
+    successor = load_contract_fixture("valid/ylx-device-session-v1.continuation.json")
+    write_contract_manifest(recordings, "successor", successor)
+    expected = {"successor"}
+    if failure == "duplicate-id":
+        write_contract_manifest(recordings, "root", predecessor)
+        duplicate = json.loads(json.dumps(predecessor))
+        duplicate["manifest_id"] = "01989f6a-2c02-7b2c-9d3e-4f5061728395"
+        duplicate["take"]["take_id"] = "01989f70-0000-7000-8000-000000000001"
+        write_contract_manifest(recordings, "duplicate", duplicate)
+        expected.update({"root", "duplicate"})
+    elif failure == "invalid-manifest":
+        write_contract_manifest(recordings, "root", predecessor)
+        (recordings / "root" / "manifest.json").write_text(
+            "{interrupted", encoding="utf-8"
+        )
+        expected.add("root")
+    failures = []
+    sessions = main.read_sessions(
+        recordings,
+        allow_unsigned=True,
+        on_error=lambda directory, error: failures.append((directory.name, str(error))),
+    )
+    assert [session.session_id for session in sessions] == [healthy["session_id"]]
+    assert {name for name, reason in failures} == expected
+    assert all(reason for name, reason in failures)
+    assert not capsys.readouterr().out
+    with pytest.raises(main.PipelineError):
+        main.read_sessions(recordings, allow_unsigned=True)
+
+
+@pytest.mark.parametrize(
     ("case_name", "mutate", "match"),
     (
         (

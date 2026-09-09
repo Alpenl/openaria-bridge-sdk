@@ -16,12 +16,20 @@ from .errors import (
     MultipleSourcesError,
     OpenAriaError,
 )
-from .models import ExportedSession, ExportResult, SessionInfo, Source, SourceMode
+from .models import (
+    ExportedSession,
+    ExportFailure,
+    ExportResult,
+    SessionInfo,
+    Source,
+    SourceMode,
+)
 
 __all__ = [
     "ContractError",
     "DiscoveryError",
     "ExportError",
+    "ExportFailure",
     "ExportResult",
     "ExportedSession",
     "MultipleSourcesError",
