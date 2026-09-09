@@ -1,251 +1,133 @@
-$oa-background: #151719;
-$oa-surface: #202428;
-$oa-panel: #252a2f;
-$oa-border: #3b4349;
-$oa-text: #e8ecef;
-$oa-muted: #9ba5ad;
-$oa-accent: #4fa37c;
-$oa-warning: #d9aa52;
-$oa-danger: #d36d6d;
+$oa-bg: #171918;
+$oa-surface: #222524;
+$oa-text: #dcdedd;
+$oa-muted: #929596;
+$oa-border: #3a403d;
+$oa-accent: #8cc9bd;
+$oa-error: #ed9b9b;
 
 Screen {
-    background: $oa-background;
+    background: $oa-bg;
     color: $oa-text;
+    align-horizontal: center;
 }
 
-Header {
-    background: #1d2124;
-    color: $oa-text;
-}
-
-#shell {
+#workbench {
+    width: 100%;
+    max-width: 160;
     height: 1fr;
+    padding: 0 3;
 }
 
-#status-bar {
-    height: 2;
-    margin: 1 2 0 2;
-    padding: 0 1;
+#masthead { height: 3; align-vertical: middle; }
+#brand { width: 12; height: 1; text-style: bold; color: $oa-accent; }
+#subtitle { width: 1fr; height: 1; color: $oa-muted; }
+#connection-state { width: 12; height: 1; text-align: right; color: $oa-accent; }
+#source-bar { height: 1; }
+#sources { width: 1fr; height: 1; margin-right: 1; background: $oa-surface; border: none; }
+SelectCurrent { border: none; background: $oa-surface; }
+SelectOverlay { background: $oa-surface; border: solid $oa-border; padding: 0; }
+
+Button {
     background: $oa-surface;
-    content-align: left middle;
+    color: $oa-text;
+    border: none;
+    min-width: 6;
+    height: 3;
+    padding: 0 1;
+    text-style: none;
 }
+Button:hover, Button:focus { background: #38413d; color: white; text-style: bold; }
+Button:disabled { opacity: 45%; }
+#rescan { width: 5; min-width: 5; height: 1; margin-right: 1; }
+#connect { width: 10; height: 1; }
 
-#activity {
-    width: 5;
-    height: 1;
-    margin-right: 1;
-    color: $oa-accent;
-}
+#views { height: 2; margin: 1 0 0 0; }
+Tabs, Tab { background: transparent; }
+Tab { color: $oa-muted; padding: 0 2; }
+Tab.-active { color: $oa-text; text-style: bold; }
+Underline > .underline--bar { color: $oa-accent; background: $oa-border; }
 
-#status-message {
-    width: 1fr;
+#content, #recordings, #activity-view { height: 1fr; }
+#filter-bar { height: 1; }
+#filter { width: 1fr; border: none; padding: 0 1; height: 1; background: $oa-surface; }
+#select-all { width: 8; height: 1; margin-left: 1; }
+#select-exported { width: 12; height: 1; margin-left: 1; }
+#delete { width: 8; height: 1; margin-left: 1; color: $oa-error; }
+#session-summary, #log-heading {
     height: 1;
     color: $oa-muted;
     text-overflow: ellipsis;
-    overflow: hidden hidden;
+    text-wrap: nowrap;
 }
-
-#status-message.error {
-    color: $oa-danger;
-}
-
-#workspace {
-    height: 1fr;
-    padding: 1 2 0 2;
-}
-
-.pane {
-    height: 1fr;
-    padding: 0 1;
-    background: $oa-panel;
-    border: solid $oa-border;
-    border-title-color: $oa-text;
-    border-title-style: bold;
-}
-
-#source-pane {
-    width: 37;
-    margin-right: 1;
-}
-
-#sessions-pane {
-    width: 1fr;
-}
-
-#source-summary,
-#session-summary {
-    height: 2;
-    padding: 0 1;
-    color: $oa-muted;
-    content-align: left middle;
-}
-
-#sources,
 #sessions {
     height: 1fr;
     border: none;
+    padding: 0;
     background: transparent;
+    scrollbar-size: 1 1;
 }
-
-#sources > .option-list--option-highlighted,
-#sessions > .option-list--option-highlighted {
-    background: #344039;
-    color: $oa-text;
+#sessions > .option-list--option { padding: 0; }
+#sessions > .option-list--option-highlighted { background: #303c37; color: $oa-text; text-style: none; }
+#sessions > .option-list--option-disabled { color: $oa-muted; }
+#sessions > .selection-list--button-selected { color: $oa-accent; background: transparent; }
+#sessions > .selection-list--button-selected-highlighted { color: $oa-accent; background: transparent; }
+#sessions > .selection-list--button, #sessions > .selection-list--button-highlighted {
+    color: $oa-bg;
+    background: $oa-bg;
 }
+#empty-state { height: 1fr; content-align: center middle; color: $oa-muted; }
+#session-detail { height: 2; color: $oa-muted; text-overflow: ellipsis; overflow: hidden hidden; }
+#activity-log { height: 1fr; background: transparent; border: none; padding: 0; scrollbar-size: 1 1; }
 
-#connect {
-    width: 100%;
-    height: 3;
-    margin-top: 1;
-}
+#transfer-bar { height: auto; border-top: solid $oa-border; }
+#destination-row { height: 1; }
+#destination-path { width: 1fr; height: 1; text-overflow: ellipsis; text-wrap: nowrap; }
+#change-output { height: 1; width: 8; margin-left: 1; }
+#export-row { height: 3; align-vertical: middle; }
+#selection-summary { width: 1fr; height: auto; max-height: 3; }
+#export { width: 16; background: $oa-accent; color: #171918; text-style: bold; margin-left: 1; }
+#export:hover, #export:focus { background: #b1e2d6; }
+#progress { height: 1; width: 1fr; }
+#progress Bar { width: 1fr; }
+#status-row { height: 1; }
+#status-message { width: 1fr; height: 1; color: $oa-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+#status-message.error { color: $oa-error; }
+#elapsed { width: 9; text-align: right; color: $oa-muted; }
 
-#unavailable-summary {
-    height: 2;
-    padding: 0 1;
-    color: $oa-warning;
-}
+Footer { background: $oa-surface; color: $oa-muted; }
+Footer > .footer--key { background: transparent; color: $oa-accent; }
 
-#transfer-bar {
-    height: 5;
-    margin: 1 2;
-    padding: 0 1;
-    background: $oa-surface;
-    content-align: left middle;
-}
-
-#destination {
-    width: 1fr;
-    height: 3;
-}
-
-#destination-label {
-    height: 1;
-    color: $oa-muted;
-}
-
-#destination-path {
-    height: 2;
-    text-overflow: ellipsis;
-    overflow: hidden hidden;
-}
-
-#change-output {
-    width: 14;
-    height: 3;
-    margin: 0 1;
-}
-
-#export {
-    min-width: 27;
-    width: auto;
-    height: 3;
-}
-
-Footer {
-    background: #1d2124;
-}
-
-TextEntryDialog {
-    align: center middle;
-    background: #000000 55%;
-}
-
+TextEntryDialog { align: center middle; background: #000000 55%; }
+DeleteDialog { align: center middle; background: #000000 55%; }
+#delete-dialog { width: 68; max-width: 94%; height: 22; max-height: 94%; padding: 1 2; border: solid $oa-border; background: $oa-surface; }
+#delete-title { height: 2; text-style: bold; color: $oa-error; }
+#delete-body { height: 1fr; scrollbar-size: 1 1; }
+#delete-description { height: auto; }
+#delete-warning { height: auto; margin-top: 1; color: $oa-error; }
+#delete-actions { height: 3; align-horizontal: right; margin-top: 1; }
+#delete-cancel, #delete-confirm { width: auto; min-width: 10; margin-left: 1; }
+#delete-confirm { background: $oa-error; color: $oa-bg; }
 #entry-dialog {
     width: 64;
-    height: 15;
+    max-width: 94%;
+    height: auto;
     padding: 1 2;
-    background: $oa-panel;
     border: solid $oa-border;
+    background: $oa-surface;
 }
+#entry-title { height: 2; text-style: bold; color: $oa-accent; }
+#entry-label { height: 1; color: $oa-muted; }
+#entry-input { margin-top: 1; border: tall $oa-border; background: $oa-bg; }
+#entry-input:focus { border: tall $oa-accent; }
+#entry-error { height: auto; min-height: 1; max-height: 4; color: $oa-error; }
+#entry-actions { height: 3; align-horizontal: right; }
+#entry-cancel, #entry-submit { width: auto; min-width: 8; margin-left: 1; }
+#entry-submit { color: $oa-bg; background: $oa-accent; }
 
-#entry-title {
-    height: 2;
-    text-style: bold;
-    color: $oa-text;
-}
-
-#entry-label {
-    height: 1;
-    color: $oa-muted;
-}
-
-#entry-input {
-    margin-top: 1;
-}
-
-#entry-error {
-    height: 2;
-    color: $oa-danger;
-}
-
-#entry-actions {
-    height: 3;
-    align-horizontal: right;
-}
-
-#entry-cancel,
-#entry-submit {
-    width: 16;
-    margin-left: 1;
-}
-
-Screen.-narrow #workspace {
-    layout: vertical;
-}
-
-Screen.-narrow #status-bar {
-    height: 1;
-    margin: 0 2;
-    padding: 0 1;
-}
-
-Screen.-narrow #activity {
-    display: none;
-}
-
-Screen.-narrow #source-pane {
-    width: 100%;
-    height: 6;
-    margin: 0 0 1 0;
-}
-
-Screen.-narrow #source-summary {
-    display: none;
-}
-
-Screen.-narrow #sessions-pane {
-    width: 100%;
-    height: 1fr;
-}
-
-Screen.-narrow #connect {
-    display: none;
-}
-
-Screen.-narrow #transfer-bar {
-    height: 6;
-    layout: vertical;
-    padding: 0 1 1 1;
-}
-
-Screen.-narrow #destination {
-    width: 100%;
-    height: 2;
-}
-
-Screen.-narrow #destination-label {
-    display: none;
-}
-
-Screen.-narrow #change-output {
-    display: none;
-}
-
-Screen.-narrow #export {
-    width: 100%;
-    height: 3;
-}
-
-Screen.-narrow #entry-dialog {
-    width: 92%;
-}
+Screen.-narrow #workbench { padding: 0 1; }
+Screen.-narrow #subtitle { display: none; }
+Screen.-narrow #brand { width: 1fr; }
+Screen.-short #masthead { height: 1; }
+Screen.-short #views { margin: 0; }
+Screen.-short #session-detail { display: none; }

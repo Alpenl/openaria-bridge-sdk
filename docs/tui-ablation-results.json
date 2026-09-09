@@ -1,0 +1,36 @@
+{
+  "baseline_commit": "1bc290c24553b1dba2b0d8c58b43ab8ce6275a03",
+  "layout": {
+    "(120, 36)": {
+      "OpenAriaTUI": {
+        "width": 68,
+        "height": 17
+      },
+      "FlatTUI": {
+        "width": 110,
+        "height": 21
+      }
+    },
+    "(80, 24)": {
+      "OpenAriaTUI": {
+        "width": 66,
+        "height": 1
+      },
+      "FlatTUI": {
+        "width": 70,
+        "height": 10
+      }
+    }
+  },
+  "source_navigation": {
+    "OpenAriaTUI": {
+      "initial_reads": 1,
+      "reads_after_cursor_down": 2
+    },
+    "ExplicitTUI": {
+      "initial_reads": 1,
+      "reads_after_cursor_down": 1
+    }
+  },
+  "without_source_hash": "3 existing TUI scenarios passed"
+}
