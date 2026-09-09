@@ -6,11 +6,14 @@ import hashlib
 import hmac
 import http.client
 import ipaddress
+import json
+import os
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -25,8 +28,10 @@ from ._export import (
     safe_segment,
 )
 from ._json import load_json
-from .errors import ContractError, DiscoveryError, ExportError
+from .errors import ContractError, DeleteError, DiscoveryError, ExportError
 from .models import (
+    DeleteFailure,
+    DeleteResult,
     ExportedSession,
     SessionInfo,
     Source,
@@ -240,6 +245,92 @@ class DeviceApiClient:
             progress=progress,
         )
 
+    def delete_sessions(
+        self, source: Source, sessions: tuple[SessionInfo, ...]
+    ) -> DeleteResult:
+        if not source.capabilities.get("session_deletion", False):
+            raise DeleteError("设备固件尚不支持远程删除，请升级固件后刷新来源")
+        if not 1 <= len(sessions) <= 200:
+            raise DeleteError("每次远程删除请选择 1 到 200 个录制")
+        expected = {session.session_id for session in sessions}
+        if len(expected) != len(sessions) or any(
+            not session.exportable or not SHA256_RE.fullmatch(session.manifest_sha256)
+            for session in sessions
+        ):
+            raise DeleteError("删除列表含重复项或缺少有效的录制摘要")
+        body = json.dumps(
+            {
+                "schema": "ylx.session-delete-request.v1",
+                "sessions": [
+                    {
+                        "session_id": session.session_id,
+                        "manifest_sha256": session.manifest_sha256,
+                    }
+                    for session in sessions
+                ],
+            }
+        ).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": str(uuid.uuid4()),
+        }
+        parsed = urllib.parse.urlsplit(self.api_base)
+        headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+        csrf = os.environ.get("OPENARIA_DEVICE_CSRF_TOKEN", self.token)
+        if csrf:
+            headers["X-CSRF-Token"] = csrf
+
+        def read() -> bytes:
+            response = self._open(
+                "sessions/delete", method="POST", data=body, headers=headers
+            )
+            try:
+                return _read_limited(
+                    response, MAX_JSON_BYTES, "session deletion result"
+                )
+            finally:
+                response.close()
+
+        value = load_json(_retry_request(read), "session deletion result")
+        if not isinstance(value, dict) or set(value) != {
+            "schema",
+            "deleted_session_ids",
+            "failed_sessions",
+        }:
+            raise ContractError("invalid session deletion result")
+        deleted, failures = value["deleted_session_ids"], value["failed_sessions"]
+        if (
+            value["schema"] != "ylx.session-delete-result.v1"
+            or not isinstance(deleted, list)
+            or not isinstance(failures, list)
+        ):
+            raise ContractError("invalid session deletion result")
+        seen = set()
+        for session_id in deleted:
+            if (
+                not isinstance(session_id, str)
+                or session_id not in expected
+                or session_id in seen
+            ):
+                raise ContractError("invalid deleted session identity")
+            seen.add(session_id)
+        for failure in failures:
+            if (
+                not isinstance(failure, dict)
+                or set(failure) != {"session_id", "error"}
+                or not isinstance(failure["session_id"], str)
+                or failure["session_id"] not in expected
+                or failure["session_id"] in seen
+                or not isinstance(failure["error"], str)
+                or not failure["error"]
+            ):
+                raise ContractError("invalid failed session identity")
+            seen.add(failure["session_id"])
+        if seen != expected:
+            raise ContractError("session deletion result omitted selected recordings")
+        return DeleteResult(
+            source, tuple(deleted), tuple(DeleteFailure(**item) for item in failures)
+        )
 
     def _manifest(self, session: SessionInfo) -> bytes:
         safe_segment(session.session_id, "session_id")

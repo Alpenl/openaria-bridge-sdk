@@ -60,8 +60,17 @@ class ExportedSession:
     media_bytes: int = 0
 
 
+@dataclasses.dataclass(frozen=True)
+class DeleteFailure:
+    session_id: str
+    error: str
 
 
+@dataclasses.dataclass(frozen=True)
+class DeleteResult:
+    source: Source
+    deleted_session_ids: tuple[str, ...]
+    failed_sessions: tuple[DeleteFailure, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

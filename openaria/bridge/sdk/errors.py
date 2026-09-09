@@ -21,6 +21,10 @@ class ExportError(OpenAriaError):
     """A session could not be exported without losing integrity."""
 
 
+class DeleteError(OpenAriaError):
+    """Source recordings could not be safely deleted."""
+
+
 class MultipleSourcesError(DiscoveryError):
     """More than one source was found and no selector chose one."""
 

@@ -11,12 +11,15 @@ The ordinary entry points are intentionally small::
 from .client import OpenAriaSDK
 from .errors import (
     ContractError,
+    DeleteError,
     DiscoveryError,
     ExportError,
     MultipleSourcesError,
     OpenAriaError,
 )
 from .models import (
+    DeleteFailure,
+    DeleteResult,
     ExportedSession,
     ExportFailure,
     ExportResult,
@@ -27,6 +30,9 @@ from .models import (
 
 __all__ = [
     "ContractError",
+    "DeleteError",
+    "DeleteFailure",
+    "DeleteResult",
     "DiscoveryError",
     "ExportError",
     "ExportFailure",

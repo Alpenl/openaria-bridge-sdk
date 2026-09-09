@@ -1,9 +1,10 @@
-"""Mounted recording-card discovery and read-only export adapter."""
+"""Mounted recording-card discovery, export, and explicit deletion."""
 
 from __future__ import annotations
 
 import dataclasses
 import os
+import shutil
 import string
 import sys
 from collections.abc import Callable, Iterable
@@ -13,8 +14,10 @@ from typing import Any
 import main as legacy
 
 from ._export import ArtifactDescriptor, export_session_tree
-from .errors import ContractError, DiscoveryError, ExportError
+from .errors import ContractError, DeleteError, DiscoveryError, ExportError
 from .models import (
+    DeleteFailure,
+    DeleteResult,
     ExportedSession,
     SessionInfo,
     Source,
@@ -168,6 +171,7 @@ def _read_inventory(root: Path) -> CardInventory:
             "session_list": True,
             "session_detail": True,
             "artifact_download": True,
+            "session_deletion": True,
         },
     )
     infos = tuple(
@@ -186,6 +190,51 @@ def _read_inventory(root: Path) -> CardInventory:
     )
 
 
+def delete_card_sessions(
+    inventory: CardInventory, session_ids: set[str]
+) -> DeleteResult:
+    root = inventory.source.card_root
+    if root is None:
+        raise DeleteError("recording card root is missing")
+    recordings = legacy.find_recordings_dir(root)
+    by_id = {session.session_id: session for session in inventory.sessions}
+    unknown = session_ids - by_id.keys()
+    if unknown:
+        raise DeleteError("录制已移除或无法安全识别：" + ", ".join(sorted(unknown)))
+    for session in inventory.sessions:
+        if (
+            session.take.get("continuation_of") in session_ids
+            and session.session_id not in session_ids
+        ):
+            raise DeleteError("请同时选择后续连续录制：" + session.session_id)
+    chosen = sorted(
+        (by_id[session_id] for session_id in session_ids),
+        key=lambda session: (session.take.get("sequence", 1), session.session_id),
+        reverse=True,
+    )
+    for session in chosen:
+        directory = session.directory
+        if (
+            directory.is_symlink()
+            or directory.parent != recordings
+            or not directory.is_dir()
+        ):
+            raise DeleteError(f"录制目录已变化，拒绝删除：{directory}")
+    deleted: list[str] = []
+    failures: list[DeleteFailure] = []
+    # Remove continuations first so a failed deletion never removes their predecessor.
+    for index, session in enumerate(chosen):
+        try:
+            shutil.rmtree(session.directory)
+        except OSError as error:
+            failures.append(DeleteFailure(session.session_id, str(error)))
+            failures.extend(
+                DeleteFailure(remaining.session_id, "前一项删除失败，已停止删除")
+                for remaining in chosen[index + 1 :]
+            )
+            break
+        deleted.append(session.session_id)
+    return DeleteResult(inventory.source, tuple(deleted), tuple(failures))
 
 
 def _system_mount_roots() -> tuple[Path, ...]:

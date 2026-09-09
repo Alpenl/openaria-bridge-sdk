@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ._card import (
     CardInventory,
+    delete_card_sessions,
     discover_card_inventories,
     export_card_session,
 )
@@ -17,12 +18,14 @@ from ._lan import (
     probe_lan_sources,
 )
 from .errors import (
+    DeleteError,
     DiscoveryError,
     ExportError,
     MultipleSourcesError,
     OpenAriaError,
 )
 from .models import (
+    DeleteResult,
     ExportFailure,
     ExportResult,
     SessionInfo,
@@ -280,6 +283,57 @@ class OpenAriaSDK:
             failed_sessions=tuple(failures),
         )
 
+    def delete_sessions(
+        self,
+        *,
+        source: Source | None = None,
+        session_ids: Iterable[str],
+        expected_manifests: Mapping[str, str] | None = None,
+    ) -> DeleteResult:
+        """Delete explicitly selected source recordings, leaving local exports intact."""
+        selected = self.select_source(source)
+        requested = set(session_ids)
+        if not requested:
+            raise DeleteError("未选择要删除的录制")
+        if selected.mode is SourceMode.LAN:
+            if not selected.capabilities.get("session_deletion", False):
+                raise DeleteError("设备固件不支持远程删除，请升级固件后刷新来源")
+            sessions = self.list_sessions(selected)
+            by_id = {session.session_id: session for session in sessions}
+            if requested - by_id.keys():
+                raise DeleteError("部分录制已移除，请刷新列表")
+            if expected_manifests is not None and (
+                set(expected_manifests) != requested
+                or any(
+                    by_id[item].manifest_sha256 != expected_manifests[item]
+                    for item in requested
+                )
+            ):
+                raise DeleteError("录制内容已变化，请刷新后重新确认删除")
+            try:
+                return DeviceApiClient(
+                    selected.api_base or selected.location,
+                    timeout=self.request_timeout,
+                    token=self.token,
+                ).delete_sessions(
+                    selected, tuple(by_id[item] for item in sorted(requested))
+                )
+            finally:
+                self._session_cache.pop(
+                    (selected.location, selected.device_id, selected.device_label), None
+                )
+        try:
+            inventory = discover_card_inventories(
+                card=selected.card_root or Path(selected.location)
+            )[0]
+            if inventory.source.device_id != selected.device_id:
+                raise DeleteError("内存卡设备身份已变化，请刷新来源")
+            return delete_card_sessions(inventory, requested)
+        finally:
+            self._card_inventories.pop(selected.location, None)
+            self._session_cache.pop(
+                (selected.location, selected.device_id, selected.device_label), None
+            )
 
     @staticmethod
     def _service_description() -> str:
