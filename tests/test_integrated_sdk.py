@@ -109,7 +109,7 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
     media = json.loads((destination / ".openaria" / "media.json").read_text())
     assert media["schema"] == "openaria.media-export.v1"
     assert media["output"]["path"] == FINAL_MEDIA_NAME
-    assert media["timeline"]["verdict"] == "aligned"
+    assert media["timeline"]["verdict"] == "no-audio"
     assert media["cleanup"]["status"] == "complete"
     assert media["cleanup"]["removed_paths"] == [
         "video/left_00000.mp4",
@@ -118,6 +118,11 @@ def test_card_mode_discovers_mount_and_exports_same_verified_tree(
 
     repeated = sdk.export(source=sources[0])
     assert repeated.sessions[0].reused is True
+
+    media["renderer"]["version"] = 1
+    media["timeline"]["verdict"] = "aligned"
+    (destination / ".openaria" / "media.json").write_text(json.dumps(media))
+    assert sdk.export(source=sources[0]).sessions[0].reused is True
 
 
 def test_modified_final_video_is_never_reused(tmp_path: Path) -> None:

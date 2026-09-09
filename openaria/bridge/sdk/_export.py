@@ -400,8 +400,10 @@ def _existing_export_matches(
         or media_receipt.get("schema") != "openaria.media-export.v1"
         or media_receipt.get("session_id") != session_id
         or media_receipt.get("source_manifest_sha256") != manifest_sha256
-        or media_receipt.get("renderer")
-        != {"name": RENDERER_NAME, "version": RENDERER_VERSION}
+        or media_receipt.get("renderer") not in (
+            {"name": RENDERER_NAME, "version": 1},
+            {"name": RENDERER_NAME, "version": RENDERER_VERSION},
+        )
         or media_receipt.get("inputs") != _media_input_records(artifacts)
         or media_receipt.get("cleanup")
         != {
@@ -675,7 +677,7 @@ def _media_receipt(
             "removed_paths": list(removed_media),
         },
         "timeline": {
-            "verdict": "aligned",
+            "verdict": "start-offset-only" if rendered.has_audio else "no-audio",
             "video_start_time_seconds": rendered.video_start_time_seconds,
             "audio_start_time_seconds": rendered.audio_start_time_seconds,
             "audio_offset_seconds": rendered.audio_offset_seconds,

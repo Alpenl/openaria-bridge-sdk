@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
+from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ VIDEO_CRF = 20
 AUDIO_BITRATE = "192k"
 COMMAND_ERROR_LIMIT = 4000
 RENDERER_NAME = "openaria-ffmpeg-sbs"
-RENDERER_VERSION = 1
+RENDERER_VERSION = 2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +43,7 @@ class MediaPlan:
     audio_sample_rate: int | None = None
     raw_mjpeg_fps: float | None = None
     output_fps: float = 0.0
+    indexed_frame_count: int | None = None
 
     @property
     def has_audio(self) -> bool:
@@ -149,6 +151,10 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
     else:
         raise ContractError(f"unsupported Device Session video layout: {layout!r}")
 
+    indexed_frame_count: int | None = None
+    if mode == "split" and manifest.get("frames") is not None:
+        output_fps, indexed_frame_count = _frame_clock(session_root, manifest)
+
     audio_paths: tuple[Path, ...] = ()
     audio_start: float | None = None
     sample_rate: int | None = None
@@ -188,7 +194,45 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
         audio_sample_rate=sample_rate,
         raw_mjpeg_fps=raw_fps,
         output_fps=output_fps,
+        indexed_frame_count=indexed_frame_count,
     )
+
+
+def _frame_clock(session_root: Path, manifest: dict[str, Any]) -> tuple[float, int]:
+    frames = _object(manifest.get("frames"), "manifest frames")
+    expected = _positive_integer(frames.get("count"), "manifest frames count")
+    path = _artifact_path(session_root, frames.get("artifact"), "frame index artifact")
+    if path.is_symlink() or not path.is_file():
+        raise ExportError(f"verified frame index disappeared: {path}")
+    timestamps: list[int] = []
+    with path.open("rb") as handle:
+        for index, line in enumerate(handle):
+            row = _object(load_json(line, "frame index row"), "frame index row")
+            if (
+                row.get("schema") != "ylx.frame-index.v1"
+                or row.get("session_id") != manifest.get("session_id")
+                or isinstance(row.get("frame"), bool)
+                or row.get("frame") != index
+            ):
+                raise ContractError("frame index identity or frame sequence is invalid")
+            timestamp = _positive_integer(
+                row.get("host_monotonic_ns"), "frame index host_monotonic_ns"
+            )
+            if timestamps and timestamp <= timestamps[-1]:
+                raise ContractError("frame index clock must be strictly increasing")
+            timestamps.append(timestamp)
+    if len(timestamps) != expected or expected < 2:
+        raise ContractError("frame index count does not provide a complete capture clock")
+
+    # Camera effective_fps includes shutdown time; only frame timestamps measure cadence.
+    interval_ns = (timestamps[-1] - timestamps[0]) / (expected - 1)
+    for index, timestamp in enumerate(timestamps):
+        if abs((timestamp - timestamps[0]) - index * interval_ns) > interval_ns / 2:
+            raise ExportError(
+                "frame clock cannot be represented at constant rate within half a frame; "
+                "preserve the source for variable-rate rendering"
+            )
+    return 1_000_000_000 / interval_ns, expected
 
 
 def render_session_video(
@@ -201,6 +245,8 @@ def render_session_video(
 
     plan = build_media_plan(session_root, manifest_bytes)
     source_frames, _ = _measure_video(plan)
+    if plan.indexed_frame_count is not None and source_frames != plan.indexed_frame_count:
+        raise ExportError("source video frame count differs from its capture clock")
     source_duration = source_frames / plan.output_fps
     plan = dataclasses.replace(plan, video_duration_seconds=source_duration)
     if output.exists() or output.is_symlink():
@@ -281,8 +327,8 @@ def build_ffmpeg_arguments(
         arguments.extend(_concat_input(plan.left_segments, workdir, "left"))
         arguments.extend(_concat_input(plan.right_segments, workdir, "right"))
         filters.append(
-            "[0:v:0]setpts=PTS-STARTPTS[left];"
-            "[1:v:0]setpts=PTS-STARTPTS[right];"
+            f"[0:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[left];"
+            f"[1:v:0]settb=AVTB,setpts=N/({_frame_rate(plan.output_fps)}*TB)[right];"
             "[left][right]hstack=inputs=2[video]"
         )
         video_map = "[video]"
@@ -335,7 +381,7 @@ def build_ffmpeg_arguments(
             "-pix_fmt",
             "yuv420p",
             "-r",
-            _decimal(plan.output_fps),
+            _frame_rate(plan.output_fps),
             "-fps_mode",
             "cfr",
             "-metadata:s:v:0",
@@ -593,6 +639,10 @@ def _sha256_file(path: Path) -> str:
 
 def _decimal(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
+
+
+def _frame_rate(value: float) -> str:
+    return str(Fraction(value).limit_denominator(1_000_000))
 
 
 def _emit(progress: Callable[[str], None] | None, message: str) -> None:
