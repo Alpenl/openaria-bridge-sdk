@@ -80,7 +80,9 @@ def test_export_options_bind_cache_and_preserve_verified_sources(
     card = tmp_path / "card"
     _, payloads, _ = _build_card(card)
     sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")
-    options = ExportOptions(video_codec="hevc", retain_sources=True, video_quality="standard")
+    options = ExportOptions(
+        video_codec="hevc", retain_sources=True, video_quality="standard"
+    )
     first = sdk.export(options=options).sessions[0]
     source = first.path / ".openaria/source"
     for relative, payload in payloads.items():
@@ -439,6 +441,118 @@ def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) ->
     assert result.unavailable_sessions == sessions
 
 
+@pytest.mark.parametrize("verdict", ["usable", None])
+def test_legacy_firmware_export_avoids_same_session_verification_race(
+    tmp_path, monkeypatch, verdict
+):
+    from openaria.bridge.sdk import _lan as lan
+
+    manifest, payloads, ids = _build_card(tmp_path / "source")
+    with _device_api(
+        manifest, payloads, ids, verification_verdict=verdict,
+        reject_overlapping_artifacts=True,
+    ) as endpoint:
+        sdk = OpenAriaSDK(endpoint=endpoint, output=tmp_path / "out")
+        original_export = lan.export_session_tree
+
+        def overlapping_export(**kwargs):
+            return original_export(**{**kwargs, "artifact_workers": 2})
+
+        # Negative control: reproduce the reported error with the old scheduler.
+        with monkeypatch.context() as old:
+            old.setattr(lan, "export_session_tree", overlapping_export)
+            with pytest.raises(DiscoveryError, match="HTTP 409.*session_not_verified"):
+                sdk.export()
+        assert not list((tmp_path / "out").rglob("*.part"))
+
+        result = sdk.export()
+        assert result.exported_count == 1
+        assert result.sessions[0].media_path.is_file()
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_metadata_only_catalog_can_export_but_still_rejects_corruption(
+    tmp_path, corrupt
+):
+    manifest, payloads, ids = _build_card(tmp_path / "source")
+    requests = []
+    with _device_api(
+        manifest,
+        payloads,
+        ids,
+        verification_verdict=None,
+        corrupt_first_artifact=corrupt,
+        requests=requests,
+    ) as endpoint:
+        sdk = OpenAriaSDK(endpoint=endpoint, output=tmp_path / "output")
+        session = sdk.list_sessions()[0]
+        assert session.exportable and session.verification_pending
+        assert session.manifest_sha256 == hashlib.sha256(manifest).hexdigest()
+        assert not any("/artifacts/" in path for path in requests)
+        if corrupt:
+            with pytest.raises(ExportError, match="SHA-256"):
+                sdk.export()
+            assert not (tmp_path / "output" / DEVICE_LABEL / SESSION_ID).exists()
+            assert not list((tmp_path / "output").rglob("*.part"))
+        else:
+            result = sdk.export()
+            assert result.exported_count == 1
+            assert result.sessions[0].media_path.is_file()
+
+
+def test_metadata_manifest_error_is_actionable_and_other_rows_remain_visible(tmp_path):
+    manifest, payloads, ids = _build_card(tmp_path / "source")
+    with _device_api(
+        manifest,
+        payloads,
+        ids,
+        verification_verdict=None,
+        failures={f"/api/v4/sessions/{SESSION_ID}": [404]},
+    ) as endpoint:
+        sdk = OpenAriaSDK(endpoint=endpoint)
+        session = sdk.list_sessions()[0]
+        assert not session.exportable
+        assert "404" in session.unavailable_reason
+        assert sdk.list_sessions(refresh=True)[0].exportable
+
+
+def test_artifact_transfers_overlap_and_cleanup_after_failure(tmp_path):
+    manifest, _, _ = _build_card(tmp_path / "source")
+    artifacts = artifacts_from_manifest(manifest, SESSION_ID)
+    barrier = threading.Barrier(2)
+    written = []
+
+    def writer(artifact, destination):
+        if artifact in artifacts[:2]:
+            barrier.wait(timeout=3)
+        destination.write_bytes(b"partial")
+        written.append(destination)
+        raise ExportError("intentional transfer failure")
+
+    session = SessionInfo(
+        SESSION_ID,
+        "test",
+        "2026-09-13",
+        1,
+        sum(a.size_bytes for a in artifacts),
+        hashlib.sha256(manifest).hexdigest(),
+    )
+    source = Source(SourceMode.LAN, "http://device", DEVICE_ID, DEVICE_LABEL)
+    with pytest.raises(ExportError, match="intentional transfer failure"):
+        export_session_tree(
+            source=source,
+            session=session,
+            output_root=tmp_path / "out",
+            manifest_name="manifest.json",
+            manifest_bytes=manifest,
+            artifact_writer=writer,
+            artifact_workers=2,
+        )
+    assert written
+    assert not list((tmp_path / "out").rglob("*.part"))
+    assert not (tmp_path / "out" / DEVICE_LABEL / SESSION_ID).exists()
+
+
 def test_lan_pagination_rejects_catalog_revision_change(tmp_path: Path) -> None:
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
@@ -544,7 +658,9 @@ def test_mdns_service_info_preserves_advertised_port() -> None:
     assert endpoints_from_service_info(info) == ("http://192.0.2.24:18080",)
 
 
-def _build_card(card: Path, *, codec: str | None = None) -> tuple[bytes, dict[str, bytes], dict[str, str]]:
+def _build_card(
+    card: Path, *, codec: str | None = None
+) -> tuple[bytes, dict[str, bytes], dict[str, str]]:
     fixture = (
         Path(__file__).resolve().parents[1]
         / "vendor/ylx-contracts/fixtures/valid/ylx-device-session-v2.audio-not-recorded.json"
@@ -554,11 +670,20 @@ def _build_card(card: Path, *, codec: str | None = None) -> tuple[bytes, dict[st
         manifest["schema"] = "ylx.device-session.v3"
         manifest["video"]["codec"] = codec
         manifest["video"]["encoding"] = {
-            "schema": "openaria.recording-encoding.v1", "codec": codec,
-            "rate_control": "cbr", "bitrate_kbps": 16384,
-            "min_qp": 18, "max_qp": 32, "intra_qp": 20, "initial_qp": 22,
-            "gop_frames": 30, "vbv_ms": 3000, "bit_depth": 8, "b_frames": 0,
-            "pixel_format": "yuv420p", "profile": "high" if codec == "h264" else "main",
+            "schema": "openaria.recording-encoding.v1",
+            "codec": codec,
+            "rate_control": "cbr",
+            "bitrate_kbps": 16384,
+            "min_qp": 18,
+            "max_qp": 32,
+            "intra_qp": 20,
+            "initial_qp": 22,
+            "gop_frames": 30,
+            "vbv_ms": 3000,
+            "bit_depth": 8,
+            "b_frames": 0,
+            "pixel_format": "yuv420p",
+            "profile": "high" if codec == "h264" else "main",
         }
     payloads = {
         "video/left_00000.mp4": b"left-video",
@@ -615,14 +740,17 @@ def _device_api(
     artifact_ids: dict[str, str],
     *,
     corrupt_first_artifact: bool = False,
-    verification_verdict: str = "usable",
+    verification_verdict: str | None = "usable",
     change_catalog_on_next_page: bool = False,
     failures: dict[str, list[int | str]] | None = None,
     requests: list[str] | None = None,
+    reject_overlapping_artifacts: bool = False,
 ) -> Iterator[str]:
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     id_to_payload = {artifact_ids[path]: payload for path, payload in payloads.items()}
     artifact_media_types: dict[str, str] = {}
+    artifact_lock = threading.Lock()
+    overlapping_request = threading.Event()
 
     def collect_media_types(value: Any) -> None:
         if isinstance(value, dict):
@@ -643,6 +771,30 @@ def _device_api(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            guarded = reject_overlapping_artifacts and "/artifacts/" in self.path
+            if guarded:
+                if not artifact_lock.acquire(blocking=False):
+                    overlapping_request.set()
+                    payload = json.dumps({
+                        "schema": "ylx.api-error.v2",
+                        "error": {"code": "session_not_verified", "retryable": False,
+                                  "details": {"reason": "absent"}},
+                    }).encode()
+                    self.send_response(409)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+                # Give an overlapping request a deterministic opportunity to
+                # invalidate the active request, as older firmware does.
+                overlapping_request.wait(timeout=0.05)
+            try:
+                self._serve_get()
+            finally:
+                if guarded:
+                    artifact_lock.release()
+
+        def _serve_get(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
             if requests is not None:
                 requests.append(parsed.path)
@@ -697,7 +849,9 @@ def _device_api(
                                 "ended_at": "2026-08-08T10:31:30+08:00",
                                 "duration_seconds": 30,
                                 "total_bytes": sum(map(len, payloads.values())),
-                                "verification": {
+                                "verification": None
+                                if verification_verdict is None
+                                else {
                                     "actor": "gateway",
                                     "validator": {
                                         "name": "rp-ylx-device-session-v2",
@@ -931,12 +1085,13 @@ def test_artifact_download_never_removes_a_preexisting_target(tmp_path: Path) ->
     ):
         DeviceApiClient(endpoint)._download_artifact(SESSION_ID, artifact, destination)
     assert destination.read_bytes() == b"keep this file"
-    assert len(requests) == 1
+    assert len(requests) == 0
 
 
 @pytest.mark.parametrize("codec", ["h264", "hevc"])
 def test_v3_card_export_preserves_true_manifest_and_source_bytes(tmp_path, codec):
     from openaria.bridge.sdk import ExportOptions
+
     card = tmp_path / "card"
     raw, payloads, _ = _build_card(card, codec=codec)
     sdk = OpenAriaSDK(mode="card", card=card, output=tmp_path / "exports")

@@ -379,7 +379,13 @@ def _decoded_video_frame_count(video: Path, *, width: int, height: int) -> int:
 
 def test_render_session_video_merges_segments_hstacks_and_trims_early_audio(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A GPU can disappear or reject a recording after its initial capability
+    # probe. Exercise fallback while retaining all image/audio assertions.
+    monkeypatch.setattr(
+        "openaria.bridge.sdk._media._hardware_ffmpeg", lambda _: "/missing/ffmpeg"
+    )
     source = tmp_path / "source with ' quote"
     _video(source / "video" / "left_00000.mp4", "red")
     _video(source / "video" / "right_00000.mp4", "blue")
@@ -397,6 +403,8 @@ def test_render_session_video_merges_segments_hstacks_and_trims_early_audio(
     assert rendered.audio_segment_count == 2
     assert rendered.audio_offset_seconds == -0.2
     assert rendered.has_audio is True
+    assert rendered.video_encoder == "libx264"
+    assert any("自动继续使用 CPU" in message for message in messages)
     assert rendered.size_bytes == output.stat().st_size
     assert any("对齐 2 段音频" in message for message in messages)
     assert _decoded_video_frame_count(output, width=64, height=32) == 8

@@ -7,10 +7,12 @@ import hashlib
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
 from fractions import Fraction
+from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -84,6 +86,7 @@ class RenderedMedia:
     output_fps: float = 0.0
     audio_clock: dict[str, Any] = dataclasses.field(default_factory=dict)
     audio_calibration_seconds: float = 0.0
+    video_encoder: str = "libx264"
 
 
 def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
@@ -93,7 +96,11 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
     if not isinstance(manifest, dict):
         raise ContractError("Device Session manifest must be an object")
     schema = manifest.get("schema")
-    if schema not in {"ylx.device-session.v1", "ylx.device-session.v2", "ylx.device-session.v3"}:
+    if schema not in {
+        "ylx.device-session.v1",
+        "ylx.device-session.v2",
+        "ylx.device-session.v3",
+    }:
         raise ContractError(
             f"automatic media rendering does not support manifest schema {schema!r}"
         )
@@ -324,19 +331,35 @@ def render_session_video(
     ) as temporary:
         workdir = Path(temporary)
         staged_output = workdir / FINAL_MEDIA_NAME
-        arguments = build_ffmpeg_arguments(
-            plan,
-            workdir=workdir,
-            output=staged_output,
-            preset=preset,
-            crf=crf,
-            audio_bitrate=audio_bitrate,
-            video_codec=video_codec,
-        )
-        _run(
-            [executable, *arguments],
-            "FFmpeg could not create the final recording",
-        )
+        hardware = _hardware_ffmpeg(video_codec)
+        encoder = "libx265" if video_codec == "hevc" else "libx264"
+
+        def encode(runtime: str, accelerated: bool) -> None:
+            arguments = build_ffmpeg_arguments(
+                plan,
+                workdir=workdir,
+                output=staged_output,
+                preset=preset,
+                crf=crf,
+                audio_bitrate=audio_bitrate,
+                video_codec=video_codec,
+                hardware_encoder=accelerated,
+            )
+            _run([runtime, *arguments], "FFmpeg could not create the final recording")
+
+        if hardware is not None:
+            encoder = "hevc_nvenc" if video_codec == "hevc" else "h264_nvenc"
+            _emit(progress, f"使用 NVIDIA 硬件编码（{encoder}）")
+            try:
+                encode(hardware, True)
+            except ExportError:
+                staged_output.unlink(missing_ok=True)
+                encoder = "libx265" if video_codec == "hevc" else "libx264"
+                _emit(progress, "硬件编码不可用，自动继续使用 CPU 编码")
+                encode(executable, False)
+        else:
+            _emit(progress, "使用 CPU 编码")
+            encode(executable, False)
         _validate_media(executable, staged_output, expect_audio=plan.has_audio)
         if plan.frame_pts_us:
             _validate_frame_pts(
@@ -372,6 +395,7 @@ def render_session_video(
         output_fps=plan.output_fps,
         audio_clock=plan.audio_clock,
         audio_calibration_seconds=audio_calibration_seconds,
+        video_encoder=encoder,
     )
 
 
@@ -384,6 +408,7 @@ def build_ffmpeg_arguments(
     crf: int = VIDEO_CRF,
     audio_bitrate: str = AUDIO_BITRATE,
     video_codec: str = "h264",
+    hardware_encoder: bool = False,
 ) -> list[str]:
     """Build one deterministic FFmpeg command for tests and execution."""
 
@@ -398,6 +423,8 @@ def build_ffmpeg_arguments(
         "-y",
         "-fflags",
         "+genpts",
+        "-filter_complex_threads",
+        "2",
     ]
     filters: list[str] = []
     if plan.mode == "split":
@@ -459,6 +486,8 @@ def build_ffmpeg_arguments(
             "-1",
             "-c:v",
             "libx265" if video_codec == "hevc" else "libx264",
+            "-threads:v",
+            "4",
             "-profile:v",
             "main" if video_codec == "hevc" else "high",
             "-preset",
@@ -479,6 +508,19 @@ def build_ffmpeg_arguments(
             "stereo_mode=left_right",
         ]
     )
+    if hardware_encoder:
+        arguments[arguments.index("-c:v") + 1] = (
+            "hevc_nvenc" if video_codec == "hevc" else "h264_nvenc"
+        )
+        arguments[arguments.index("-preset") + 1] = "p6" if crf <= 18 else "p4"
+        arguments[arguments.index("-crf")] = "-cq"
+        arguments.extend(
+            ["-rc", "vbr", "-b:v", "0", "-spatial-aq", "1", "-temporal-aq", "1"]
+        )
+    else:
+        arguments[arguments.index("-threads:v") + 1] = str(
+            min(16, max(4, (os.cpu_count() or 8) // 2))
+        )
     if video_codec == "hevc":
         arguments.extend(
             [
@@ -518,6 +560,11 @@ def build_ffmpeg_arguments(
         )
     else:
         arguments.extend(["-r", _frame_rate(plan.output_fps), "-fps_mode", "cfr"])
+    if hardware_encoder:
+        for private_option in ("-x264-params", "-x265-params"):
+            while private_option in arguments:
+                index = arguments.index(private_option)
+                del arguments[index : index + 2]
     if plan.has_audio:
         arguments.extend(
             [
@@ -693,6 +740,79 @@ def _ffmpeg_executable() -> str:
         raise ExportError(
             f"the bundled FFmpeg runtime is unavailable: {error}"
         ) from error
+
+
+@lru_cache(maxsize=4)
+def _hardware_ffmpeg(codec: str) -> str | None:
+    """Probe real encoding plus the required timestamp features once per codec.
+
+    No download or driver change occurs here. Missing/old runtimes and busy or
+    unsupported GPUs retain the bundled software encoder as a working fallback.
+    """
+    binary = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    data_root = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local/share")))
+    candidates = [
+        os.environ.get("OPENARIA_FFMPEG"),
+        _ffmpeg_executable(),
+        str(data_root / "openaria/ffmpeg" / binary),
+        shutil.which("ffmpeg"),
+    ]
+    encoder = "hevc_nvenc" if codec == "hevc" else "h264_nvenc"
+    for executable in dict.fromkeys(candidates):
+        if not executable:
+            continue
+        try:
+            with tempfile.TemporaryDirectory(prefix="openaria-encoder-probe-") as tmp:
+                result = subprocess.run(
+                    [
+                        executable,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-nostdin",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=size=3840x1080:rate=30",
+                        "-frames:v",
+                        "2",
+                        "-c:v",
+                        encoder,
+                        "-preset",
+                        "p6",
+                        "-cq",
+                        "18",
+                        "-rc",
+                        "vbr",
+                        "-b:v",
+                        "0",
+                        "-spatial-aq",
+                        "1",
+                        "-temporal-aq",
+                        "1",
+                        "-bf",
+                        "0",
+                        "-fps_mode",
+                        "passthrough",
+                        "-enc_time_base:v",
+                        "1:1000000",
+                        "-video_track_timescale",
+                        "1000000",
+                        "-movie_timescale",
+                        "1000000",
+                        "-bsf:v",
+                        "setts=pts=PTS:dts=DTS:duration=DURATION",
+                        str(Path(tmp) / "probe.mp4"),
+                    ],
+                    capture_output=True,
+                    timeout=15,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return executable
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return None
 
 
 def _measure_video(plan: MediaPlan) -> tuple[int, float]:

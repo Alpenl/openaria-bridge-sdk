@@ -63,7 +63,7 @@ def test_batch_continues_after_bad_recording_and_retains_failure_details(
     monkeypatch.setattr(sdk, "list_sessions", inventory)
     monkeypatch.setattr(client_module, "DeviceApiClient", Client)
     result = sdk.export(source=SOURCE, continue_on_error=True)
-    assert calls == ["first", "second"]
+    assert sorted(calls) == ["first", "second"]
     assert [item.session_id for item in result.sessions] == ["second"]
     assert [(item.session_id, item.error) for item in result.failed_sessions] == [
         ("first", "corrupt recording")

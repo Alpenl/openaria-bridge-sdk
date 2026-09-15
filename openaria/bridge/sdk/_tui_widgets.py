@@ -138,8 +138,12 @@ def duration(seconds: float) -> str:
 
 
 def started_at(session: SessionInfo) -> str:
+    if session.time_note and "未知" in session.time_note:
+        return "日期未知（设备未校时）"
     try:
-        return datetime.fromisoformat(session.started_at).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromisoformat(session.started_at).strftime("%Y-%m-%d %H:%M") + (
+            "（推算）" if session.time_note else ""
+        )
     except ValueError:
         return session.started_at
 
@@ -147,7 +151,7 @@ def started_at(session: SessionInfo) -> str:
 def unavailable_text(session: SessionInfo) -> str:
     reason = session.unavailable_reason or "不可用"
     return {
-        "gateway verification is missing": "等待机身校验",
+        "gateway verification is missing": "设备未提供校验状态，请刷新或升级固件",
         "verification actor is not the gateway": "校验来源不受支持",
         "gateway verification has no valid manifest digest": "校验摘要无效",
         "gateway marked the session unusable": "机身标记为不可用",
@@ -176,7 +180,16 @@ def session_label(session: SessionInfo, width: int, *, exported: bool = False) -
     metadata = f"  {duration(session.duration_seconds):>8}  {human_bytes(session.total_bytes):>10}"
     if width >= 88:
         metadata += f"  {started_at(session)}"
-    name = Text(session.display_name or session.session_id, style="bold")
+    display = session.display_name or session.session_id
+    if (
+        session.time_note
+        and "未知" in session.time_note
+        and display.startswith("录制 ")
+    ):
+        display = "录制（设备未校时）"
+    if session.verification_pending:
+        display += " · 下载时校验"
+    name = Text(display, style="bold")
     prefix = Text("已导出 ", style="#8cc9bd") if exported else Text()
     name_width = max(8, width - Text(metadata).cell_len - prefix.cell_len)
     name.truncate(name_width, overflow="ellipsis", pad=True)
@@ -222,7 +235,10 @@ class ExportSettingsDialog(ModalScreen[ExportOptions | None]):
                 id="export-codec",
             )
             yield Select(
-                [("标准画质", "standard"), ("高画质 · 保留更多细节，生成更慢、文件可能更大", "high")],
+                [
+                    ("标准画质", "standard"),
+                    ("高画质 · 保留更多细节，生成更慢、文件可能更大", "high"),
+                ],
                 value=self.options.video_quality,
                 allow_blank=False,
                 id="export-quality",

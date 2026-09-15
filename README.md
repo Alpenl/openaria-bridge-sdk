@@ -159,11 +159,38 @@ SDK exports stop at the first failure by default. To collect per-recording
 errors and continue with the remaining recordings, use:
 
 ```python
-result = OpenAriaSDK(mode="lan", output="./exports").export(continue_on_error=True)
+result = OpenAriaSDK(mode="lan", output="./exports").export(
+    continue_on_error=True,
+    max_workers=2,
+)
 
 for failure in result.failed_sessions:
     print(failure.session_id, failure.error)
 ```
+
+Continuing batches (including the TUI) export two recordings concurrently by
+default. `max_workers` accepts 1–8; use 1 for a serial batch. Each LAN recording
+downloads its artifacts sequentially for compatibility with firmware that resets
+session verification on each request. Different recordings still overlap their
+downloads and rendering. Software H.264 encoding uses up to 16 video
+threads (bounded by available CPUs) and two filter threads. Final output settings and integrity checks are
+unchanged. Fail-fast SDK calls remain sequential so an error does not start later
+recordings. Results retain catalog order even when recordings finish out of order.
+
+A device may list sealed historical recordings with `verification: null` after
+restart. This means payload verification happens on artifact access. Bridge
+resolves the small manifest and its digest with up to four concurrent reads,
+then shows the recording as selectable with “下载时校验”. Listing does not download
+media. Explicitly unusable recordings remain blocked, manifest failures show a
+retryable action in the row, and every downloaded artifact still needs the
+declared length and SHA-256 before a final MP4 can be published.
+
+If a device clock jumps during recording, Bridge can recover the displayed start
+from a valid end timestamp and the recorded duration. It marks the result as
+“推算”, preserves the original manifest bytes, and orders the corrected entry by
+its recovered time. If both timestamps are uncalibrated, it shows an unknown date
+instead of presenting the year 2000 as the recording date. See
+[the investigation and validation notes](docs/export-reliability-20260913.md).
 
 `result.sessions` contains successful exports. Explicitly selected recordings
 that have disappeared or become unavailable are included in `failed_sessions`.
