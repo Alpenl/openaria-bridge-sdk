@@ -44,6 +44,8 @@ class SessionInfo:
     manifest_sha256: str
     exportable: bool = True
     unavailable_reason: str | None = None
+    verification_pending: bool = False
+    time_note: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)

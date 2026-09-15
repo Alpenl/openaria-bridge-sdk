@@ -13,7 +13,7 @@ def _version() -> str:
     try:
         return importlib.metadata.version("ylx-card-pipeline")
     except importlib.metadata.PackageNotFoundError:
-        return "0.4.2"
+        return "0.4.3"
 
 
 def build_parser() -> argparse.ArgumentParser:

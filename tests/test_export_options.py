@@ -52,3 +52,30 @@ def test_old_receipts_default_to_standard_and_high_roundtrips():
 def test_unknown_quality_is_rejected():
     with pytest.raises(ContractError, match="video_quality"):
         ExportOptions(video_quality="lossless")
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_hardware_encoding_preserves_frame_timestamps(tmp_path, codec):
+    plan = MediaPlan(
+        mode="split",
+        left_segments=(tmp_path / "left.mp4",),
+        right_segments=(tmp_path / "right.mp4",),
+        output_fps=30,
+        frame_pts_us=(0, 33333, 68000),
+    )
+    args = build_ffmpeg_arguments(
+        plan,
+        workdir=tmp_path,
+        output=tmp_path / "out.mp4",
+        video_codec=codec,
+        hardware_encoder=True,
+        crf=18,
+    )
+    assert args[args.index("-c:v") + 1] == f"{codec}_nvenc"
+    assert args[args.index("-cq") + 1] == "18"
+    assert (
+        "-crf" not in args and "-x264-params" not in args and "-x265-params" not in args
+    )
+    assert args[args.index("-fps_mode") + 1] == "passthrough"
+    assert args[args.index("-enc_time_base:v") + 1] == "1:1000000"
+    assert args[args.index("-bf") + 1] == "0"

@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -89,7 +90,11 @@ def artifacts_from_manifest(
 
     artifacts: list[ArtifactDescriptor] = []
     schema = manifest.get("schema")
-    if schema in {"ylx.device-session.v1", "ylx.device-session.v2", "ylx.device-session.v3"}:
+    if schema in {
+        "ylx.device-session.v1",
+        "ylx.device-session.v2",
+        "ylx.device-session.v3",
+    }:
         audio = manifest.get("audio")
         if isinstance(audio, dict) and audio.get("state") == "recorded":
             try:
@@ -216,6 +221,7 @@ def export_session_tree(
     artifact_writer: Callable[[ArtifactDescriptor, Path], None],
     progress: Callable[[str], None] | None = None,
     options: ExportOptions | None = None,
+    artifact_workers: int = 1,
 ) -> ExportedSession:
     """Verify source bytes, render final media, and publish with one directory rename."""
 
@@ -291,6 +297,7 @@ def export_session_tree(
                 progress=progress,
                 final_directory=final_directory,
                 options=options,
+                artifact_workers=artifact_workers,
             )
         if _legacy_export_matches(
             final_directory,
@@ -332,7 +339,9 @@ def export_session_tree(
         source_tree = internal / SOURCE_DIRECTORY
         source_tree.mkdir(parents=True)
         (source_tree / manifest_name).write_bytes(manifest_bytes)
-        for index, artifact in enumerate(artifacts, start=1):
+
+        def transfer(item: tuple[int, ArtifactDescriptor]) -> None:
+            index, artifact = item
             destination = source_tree / artifact.relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             _emit(
@@ -341,6 +350,11 @@ def export_session_tree(
             )
             artifact_writer(artifact, destination)
             _verify_artifact_file(destination, artifact)
+
+        with ThreadPoolExecutor(max_workers=artifact_workers) as executor:
+            # Wait for all running writes before staging cleanup on any failure.
+            for _ in executor.map(transfer, enumerate(artifacts, start=1)):
+                pass
         _write_json(
             internal / EXPORT_RECEIPT,
             _export_receipt(
@@ -458,7 +472,9 @@ def _existing_export_matches(
     cleanup = media_receipt.get("cleanup")
     recorded_options = media_receipt.get("options", {})
     try:
-        previous_options = ExportOptions(**({"video_quality": "standard"} | recorded_options))
+        previous_options = ExportOptions(
+            **({"video_quality": "standard"} | recorded_options)
+        )
     except (TypeError, ValueError, ContractError):
         return None
     if not allow_legacy_renderer and previous_options != (options or ExportOptions()):
@@ -814,6 +830,7 @@ def _media_receipt(
             "sha256": rendered.sha256,
             "container": "mp4",
             "video_codec": options.video_codec,
+            "video_encoder": rendered.video_encoder,
             "audio_codec": "aac" if rendered.has_audio else None,
         },
     }

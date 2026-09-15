@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import hmac
 import http.client
 import ipaddress
 import json
+import math
 import os
 import threading
 import time
@@ -16,18 +18,22 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from zeroconf import IPVersion, ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
 
 from ._export import (
     SHA256_RE,
     ArtifactDescriptor,
+    artifacts_from_manifest,
     export_session_tree,
     safe_segment,
+    sha256_file,
 )
 from ._json import load_json
+from ._recording_time import recording_time
 from .errors import ContractError, DeleteError, DiscoveryError, ExportError
 from .models import (
     DeleteFailure,
@@ -49,6 +55,7 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_REQUEST_ATTEMPTS = 3
 MAX_PROBE_WORKERS = 8
 PROBE_TIMEOUT = 3.0
+ARTIFACT_TIMEOUT = 120.0
 RETRYABLE_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 
@@ -141,7 +148,53 @@ class DeviceApiClient:
     def list_sessions(self, source: Source) -> tuple[SessionInfo, ...]:
         for attempt in range(MAX_REQUEST_ATTEMPTS):
             try:
-                return self._list_sessions_once(source)
+                sessions = self._list_sessions_once(source)
+
+                # Metadata-only catalogs deliberately defer payload verification
+                # until download. Resolve only small manifests, never media here.
+                def resolve(session: SessionInfo) -> SessionInfo:
+                    if not session.verification_pending:
+                        return session
+                    try:
+                        raw = self._manifest(session)
+                        manifest = load_json(raw, "Device Session manifest")
+                        artifacts = artifacts_from_manifest(raw, session.session_id)
+                        device = manifest.get("device", {})
+                        if (
+                            manifest.get("sealed") is not True
+                            or not isinstance(device, dict)
+                            or device.get("device_id") != source.device_id
+                            or device.get("device_label") != source.device_label
+                            or sum(item.size_bytes for item in artifacts)
+                            != session.total_bytes
+                        ):
+                            raise ContractError(
+                                "manifest does not match the catalog identity or size"
+                            )
+                        return dataclasses.replace(
+                            session, manifest_sha256=hashlib.sha256(raw).hexdigest()
+                        )
+                    except (DiscoveryError, ContractError) as error:
+                        return dataclasses.replace(
+                            session,
+                            exportable=False,
+                            unavailable_reason=f"读取录制清单失败：{error}",
+                        )
+
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    resolved = tuple(executor.map(resolve, sessions))
+                if any(session.time_note for session in resolved):
+
+                    def chronology(session: SessionInfo) -> float:
+                        try:
+                            return datetime.fromisoformat(
+                                session.started_at
+                            ).timestamp()
+                        except (ValueError, OverflowError, OSError):
+                            return float("-inf")
+
+                    resolved = tuple(sorted(resolved, key=chronology, reverse=True))
+                return resolved
             except _CatalogChangedError:
                 if attempt == MAX_REQUEST_ATTEMPTS - 1:
                     raise
@@ -233,6 +286,8 @@ class DeviceApiClient:
                 f"session {session.session_id} is unavailable: {session.unavailable_reason}"
             )
         manifest_bytes = self._manifest(session)
+        if session.verification_pending and progress:
+            progress(f"{session.session_id}: 下载时校验历史录制，首次读取可能较慢")
 
         def write_artifact(artifact: ArtifactDescriptor, destination: Path) -> None:
             self._download_artifact(session.session_id, artifact, destination)
@@ -246,6 +301,12 @@ class DeviceApiClient:
             artifact_writer=write_artifact,
             progress=progress,
             options=options,
+            # Existing firmware invalidates the entire session's verification
+            # before each artifact request. Concurrent requests for the SAME
+            # session can invalidate one another between verification and open,
+            # returning session_not_verified/absent. Parallelize recordings in
+            # the SDK, but keep each recording's artifact requests sequential.
+            artifact_workers=1,
         )
 
     def delete_sessions(
@@ -364,7 +425,11 @@ class DeviceApiClient:
             raise ContractError(
                 "Device API v4 manifest body does not match its digest header"
             )
-        if not hmac.compare_digest(actual, session.manifest_sha256):
+        if not session.manifest_sha256 and not session.verification_pending:
+            raise ContractError("session has no manifest digest")
+        if session.manifest_sha256 and not hmac.compare_digest(
+            actual, session.manifest_sha256
+        ):
             raise ContractError(
                 "Device API v4 manifest changed after session discovery"
             )
@@ -376,25 +441,66 @@ class DeviceApiClient:
         artifact: ArtifactDescriptor,
         destination: Path,
     ) -> None:
-        _retry_request(
-            lambda: self._download_artifact_once(session_id, artifact, destination)
-        )
+        # Own the target once, preserving verified-by-offset bytes across transient
+        # failures. Never remove or overwrite a pre-existing caller-owned file.
+        handle = destination.open("xb")
+        try:
+            with handle:
+                _retry_request(
+                    lambda: self._download_artifact_once(session_id, artifact, handle)
+                )
+            if not hmac.compare_digest(sha256_file(destination), artifact.sha256):
+                raise ExportError(
+                    f"artifact {artifact.path} failed size/SHA-256 verification"
+                )
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
 
     def _download_artifact_once(
         self,
         session_id: str,
         artifact: ArtifactDescriptor,
-        destination: Path,
+        handle: BinaryIO,
     ) -> None:
         path = (
             f"sessions/{_quote_segment(session_id)}/artifacts/"
             f"{_quote_segment(artifact.artifact_id)}"
         )
-        response = self._open(path)
-        created = False
+        offset = handle.tell()
+        if offset == artifact.size_bytes and offset > 0:
+            return
+        headers = (
+            {"Range": f"bytes={offset}-", "If-Range": f'"{artifact.sha256}"'}
+            if offset
+            else None
+        )
+        response = self._open(
+            path,
+            headers=headers,
+            timeout=max(self.timeout, ARTIFACT_TIMEOUT),
+            accepted_statuses=(200, 206),
+        )
         try:
+            status = getattr(response, "status", response.getcode())
+            if status == 206:
+                expected = (
+                    f"bytes {offset}-{artifact.size_bytes - 1}/{artifact.size_bytes}"
+                )
+                if (
+                    not offset
+                    or _single_header(response.headers, "Content-Range") != expected
+                ):
+                    raise ExportError(
+                        f"artifact {artifact.path} has an invalid resume range"
+                    )
+            else:
+                # An older server may ignore Range. Restart this artifact safely.
+                offset = 0
+                handle.seek(0)
+                handle.truncate()
             content_length = _content_length(response.headers)
-            if content_length != artifact.size_bytes:
+            if content_length != artifact.size_bytes - offset:
                 raise ExportError(
                     f"artifact {artifact.path} Content-Length does not match the manifest"
                 )
@@ -411,33 +517,21 @@ class DeviceApiClient:
                 raise ExportError(
                     f"artifact {artifact.path} Content-Type does not match the manifest"
                 )
-            digest = hashlib.sha256()
-            received = 0
-            with destination.open("xb") as handle:
-                created = True
-                while chunk := _read_response(
-                    response, DOWNLOAD_CHUNK_BYTES, artifact.path
-                ):
-                    received += len(chunk)
-                    if received > artifact.size_bytes:
-                        raise ExportError(
-                            f"artifact {artifact.path} exceeded its declared size"
-                        )
-                    digest.update(chunk)
-                    handle.write(chunk)
+            received = offset
+            while chunk := _read_response(
+                response, DOWNLOAD_CHUNK_BYTES, artifact.path
+            ):
+                received += len(chunk)
+                if received > artifact.size_bytes:
+                    raise ExportError(
+                        f"artifact {artifact.path} exceeded its declared size"
+                    )
+                handle.write(chunk)
             if received != artifact.size_bytes:
                 raise _RetryableRequestError(
                     f"artifact {artifact.path} download was interrupted: "
                     f"expected {artifact.size_bytes} bytes, received {received}"
                 )
-            if not hmac.compare_digest(digest.hexdigest(), artifact.sha256):
-                raise ExportError(
-                    f"artifact {artifact.path} failed size/SHA-256 verification"
-                )
-        except Exception:
-            if created:
-                destination.unlink(missing_ok=True)
-            raise
         finally:
             response.close()
 
@@ -465,6 +559,8 @@ class DeviceApiClient:
         method: str = "GET",
         data: bytes | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        accepted_statuses: tuple[int, ...] = (200,),
     ) -> Any:
         url = f"{self.api_base}/{path.lstrip('/')}"
         if query:
@@ -480,7 +576,9 @@ class DeviceApiClient:
             url, headers=request_headers, method=method, data=data
         )
         try:
-            response = self._opener.open(request, timeout=self.timeout)
+            response = self._opener.open(
+                request, timeout=self.timeout if timeout is None else timeout
+            )
         except urllib.error.HTTPError as error:
             try:
                 detail = (
@@ -506,7 +604,7 @@ class DeviceApiClient:
                 f"cannot reach Device API at {self.api_base}: {reason}"
             ) from error
         status = getattr(response, "status", response.getcode())
-        if status != 200:
+        if status not in accepted_statuses:
             response.close()
             error_type = (
                 _RetryableRequestError
@@ -664,6 +762,7 @@ def _session_info(value: Any, source: Source) -> SessionInfo:
     if (
         isinstance(duration, bool)
         or not isinstance(duration, (int, float))
+        or not math.isfinite(duration)
         or duration < 0
     ):
         raise ContractError(f"session {session_id} has an invalid duration")
@@ -675,7 +774,8 @@ def _session_info(value: Any, source: Source) -> SessionInfo:
     ):
         raise ContractError(f"session {session_id} has an invalid total_bytes")
     verification = value.get("verification")
-    exportable = False
+    pending = "verification" in value and verification is None
+    exportable = pending
     reason = "gateway verification is missing"
     manifest_sha256 = ""
     if isinstance(verification, dict):
@@ -692,15 +792,26 @@ def _session_info(value: Any, source: Source) -> SessionInfo:
             exportable = True
             reason = None
             manifest_sha256 = manifest
+    corrected_start, time_note = recording_time(
+        started_at, value.get("ended_at"), float(duration)
+    )
+    if corrected_start != started_at and display_name == datetime.fromisoformat(
+        started_at
+    ).strftime("录制 %Y-%m-%d %H:%M:%S"):
+        display_name = "录制 " + datetime.fromisoformat(corrected_start).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
     return SessionInfo(
         session_id=session_id,
         display_name=display_name,
-        started_at=started_at,
+        started_at=corrected_start,
         duration_seconds=float(duration),
         total_bytes=total_bytes,
         manifest_sha256=manifest_sha256,
         exportable=exportable,
-        unavailable_reason=reason,
+        unavailable_reason=None if pending else reason,
+        verification_pending=pending,
+        time_note=time_note,
     )
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from ._card import (
@@ -26,6 +28,7 @@ from .errors import (
 )
 from .models import (
     DeleteResult,
+    ExportedSession,
     ExportFailure,
     ExportResult,
     SessionInfo,
@@ -190,14 +193,19 @@ class OpenAriaSDK:
         progress: Callable[[str], None] | None = None,
         continue_on_error: bool = False,
         options: ExportOptions | None = None,
+        max_workers: int = 2,
     ) -> ExportResult:
         """Export a fresh inventory, optionally collecting per-recording failures.
 
         Source discovery and catalog errors always raise. By default the first
         recording error also raises; ``continue_on_error`` returns these errors
         in ``failed_sessions`` while attempting the remaining recordings.
+        Continuing batches run up to ``max_workers`` recordings concurrently;
+        fail-fast batches remain sequential so later recordings are not started.
         """
 
+        if type(max_workers) is not int or not 1 <= max_workers <= 8:
+            raise ValueError("max_workers must be an integer between 1 and 8")
         selected = self.select_source(source)
         sessions = self.list_sessions(selected, refresh=True)
         requested = set(session_ids) if session_ids is not None else None
@@ -242,15 +250,8 @@ class OpenAriaSDK:
             self.output if output is None else Path(output).expanduser()
         ).resolve()
         exported = []
-        client = None
         inventory = None
-        if selected.mode is SourceMode.LAN:
-            client = DeviceApiClient(
-                selected.api_base or selected.location,
-                timeout=self.request_timeout,
-                token=self.token,
-            )
-        else:
+        if selected.mode is SourceMode.CARD:
             inventory = self._card_inventories.get(selected.location)
             if inventory is None:
                 raise DiscoveryError(f"recording card disappeared: {selected.location}")
@@ -262,25 +263,69 @@ class OpenAriaSDK:
                     "card-mode output must be outside the source recording card: "
                     f"{output_root}"
                 )
-        for session in chosen:
+        progress_lock = threading.Lock()
+
+        def report(message: str) -> None:
+            if progress is not None:
+                with progress_lock:
+                    progress(message)
+
+        def export_one(session: SessionInfo) -> ExportedSession:
+            if selected.mode is SourceMode.LAN:
+                # Each worker owns its HTTP client/opener.
+                return DeviceApiClient(
+                    selected.api_base or selected.location,
+                    timeout=self.request_timeout,
+                    token=self.token,
+                ).export_session(selected, session, output_root, report, options)
+            assert inventory is not None
+            return export_card_session(inventory, session, output_root, report, options)
+
+        def collect(
+            session: SessionInfo, operation: Callable[[], ExportedSession]
+        ) -> None:
             try:
-                if client is not None:
-                    exported.append(
-                        client.export_session(
-                            selected, session, output_root, progress, options
-                        )
-                    )
-                else:
-                    assert inventory is not None
-                    exported.append(
-                        export_card_session(
-                            inventory, session, output_root, progress, options
-                        )
-                    )
+                result = operation()
             except (OpenAriaError, OSError) as error:
                 if not continue_on_error:
                     raise
                 failures.append(ExportFailure(session.session_id, str(error)))
+                report(f"{session.session_id}: 导出失败：{error}")
+            else:
+                exported.append(result)
+                report(f"{session.session_id}: 导出完成")
+
+        if continue_on_error and max_workers > 1 and len(chosen) > 1:
+            report(f"并行导出：最多 {max_workers} 个录制")
+            # Submit only a bounded window; long batches do not queue thousands
+            # of futures and a completed recording immediately frees its slot.
+            remaining = iter(chosen)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                active = {}
+                for session in remaining:
+                    active[executor.submit(export_one, session)] = session
+                    if len(active) == max_workers:
+                        break
+                while active:
+                    done, _ = wait(active, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        session = active.pop(future)
+                        collect(session, future.result)
+                        next_session = next(remaining, None)
+                        if next_session is not None:
+                            active[executor.submit(export_one, next_session)] = (
+                                next_session
+                            )
+            order = {
+                session.session_id: index for index, session in enumerate(sessions)
+            }
+            exported.sort(key=lambda item: order[item.session_id])
+            failures.sort(
+                key=lambda item: (order.get(item.session_id, -1), item.session_id)
+            )
+        else:
+            for session in chosen:
+                collect(session, lambda session=session: export_one(session))
         return ExportResult(
             source=selected,
             output_root=output_root,
