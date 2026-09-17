@@ -94,6 +94,7 @@ def artifacts_from_manifest(
         "ylx.device-session.v1",
         "ylx.device-session.v2",
         "ylx.device-session.v3",
+        "ylx.device-session.v4",
     }:
         audio = manifest.get("audio")
         if isinstance(audio, dict) and audio.get("state") == "recorded":

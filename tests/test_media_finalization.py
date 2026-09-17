@@ -51,10 +51,12 @@ def _indexed_manifest(root: Path, timestamps_ns: list[int]) -> dict[str, object]
     ],
 )
 @pytest.mark.parametrize("codec", ["h264", "hevc"])
+@pytest.mark.parametrize("compressed", [False, True])
 def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     tmp_path: Path,
     offsets: list[int],
     codec: str,
+    compressed: bool,
 ) -> None:
     for eye in ("left", "right"):
         for index in range(2):
@@ -65,6 +67,46 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     ]
     interval_ns = (timestamps[-1] - timestamps[0]) / 7
     manifest = _indexed_manifest(tmp_path, timestamps)
+    if compressed:
+        import hashlib
+        import zstandard
+
+        manifest["schema"] = "ylx.device-session.v4"
+        path = tmp_path / "frames.ndjson"
+        rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+        for index, row in enumerate(rows):
+            row.update(
+                schema="ylx.frame-index.v2",
+                source_sequence=index * 2,
+                segment_index=index // 4,
+                segment_frame=index % 4,
+                timestamp_audit={
+                    "schema": "openaria.frame-timestamp-audit.v1",
+                    "v4l2_buffer_flags": 0x12001,
+                    "host_dequeue_monotonic_ns": row["host_monotonic_ns"] + 100,
+                    "timestamp_clock": "v4l2_monotonic",
+                    "timestamp_source": "start_of_exposure",
+                    "camera_counter_raw": index * 2,
+                    "counter_bits": 24,
+                },
+            )
+        original = b"".join((json.dumps(row) + "\n").encode() for row in rows)
+        compressed_bytes = zstandard.ZstdCompressor(
+            level=1, write_checksum=True
+        ).compress(original)
+        (tmp_path / "frames.ndjson.zst").write_bytes(compressed_bytes)
+        manifest["frames"]["artifact"].update(
+            path="frames.ndjson.zst",
+            media_type="application/zstd",
+            storage_encoding={
+                "codec": "zstd",
+                "level": 1,
+                "block_bytes": 1048576,
+                "uncompressed_bytes": len(original),
+                "uncompressed_sha256": hashlib.sha256(original).hexdigest(),
+            },
+        )
+        path.unlink()
     output = tmp_path / "recording.mp4"
 
     rendered = render_session_video(

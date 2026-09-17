@@ -93,6 +93,7 @@ READ_CHUNK_BYTES = 1024 * 1024
 DEVICE_SESSION_V1_SCHEMA = "ylx.device-session.v1"
 DEVICE_SESSION_V2_SCHEMA = "ylx.device-session.v2"
 DEVICE_SESSION_V3_SCHEMA = "ylx.device-session.v3"
+DEVICE_SESSION_V4_SCHEMA = "ylx.device-session.v4"
 BUCKET_PUBLICATION_V2_SCHEMA = "ylx.bucket-publication.v2"
 BUCKET_PUBLICATION_V3_SCHEMA = "ylx.bucket-publication.v3"
 LEGACY_PUBLICATION_MANIFEST_SCHEMA = "legacy.publication-manifest.v1"
@@ -386,6 +387,12 @@ def _device_session_v2_validator() -> Draft202012Validator:
 
 
 @lru_cache
+def _device_session_v4_validator() -> Draft202012Validator:
+    schema = json.loads((Path(__file__).parent / "openaria/bridge/sdk/schemas/ylx-device-session-v4.schema.json").read_text())
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+@lru_cache
 def _device_session_v3_validator() -> Draft202012Validator:
     schema = json.loads((Path(__file__).parent / "openaria/bridge/sdk/schemas/ylx-device-session-v3.schema.json").read_text())
     return Draft202012Validator(schema, format_checker=FormatChecker())
@@ -412,7 +419,7 @@ def _bucket_publication_v3_validator() -> Draft202012Validator:
         if isinstance(value, dict):
             if value.get("const") == DEVICE_SESSION_V2_SCHEMA:
                 value.pop("const")
-                value["enum"] = [DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA]
+                value["enum"] = [DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA]
             for child in value.values():
                 extend(child)
         elif isinstance(value, list):
@@ -1163,7 +1170,7 @@ def _device_session_artifact(
     artifact = _require_dict(entry, "artifact must be an object")
     required = {"artifact_id", "role", "path", "media_type", "bytes", "sha256"}
     _require_device_session_v1(
-        required.issubset(artifact) and set(artifact).issubset(required),
+        required.issubset(artifact) and set(artifact).issubset(required | {"storage_encoding"}),
         "artifact fields",
     )
     source_role = _require_string(artifact.get("role"), "artifact role")
@@ -1176,7 +1183,11 @@ def _device_session_artifact(
     media_type = _require_string(artifact.get("media_type"), "artifact media_type")
     if expected_media_type is not None:
         _require_device_session_v1(
-            media_type == expected_media_type, "artifact media_type"
+            media_type == expected_media_type or (
+                (expected_media_type, media_type) in {
+                    ("application/x-ndjson", "application/zstd"), ("audio/wav", "audio/flac")
+                } and "storage_encoding" in artifact
+            ), "artifact media_type"
         )
     path = _require_string(artifact.get("path"), "artifact path")
     _validate_relative_artifact_path(path)
@@ -1551,7 +1562,7 @@ def _validate_device_session_v2_audio_invariants(manifest: dict[str, Any]) -> No
                 "device-session v2 invariant rejection: audio artifact byte count"
             )
         artifact = segment["artifact"]
-        if artifact["bytes"] != expected_file_bytes:
+        if artifact.get("media_type") != "audio/flac" and artifact["bytes"] != expected_file_bytes:
             raise PipelineError(
                 "device-session v2 invariant rejection: audio artifact bytes must "
                 "equal pcm_payload_bytes + wav_header_bytes"
@@ -1609,7 +1620,7 @@ def _read_device_session_v1(
         "logs",
         "integrity",
     }
-    _require_device_session_v1(set(manifest) == expected_top, "top-level fields")
+    _require_device_session_v1(set(manifest) - ({"capture_audit"} if manifest["schema"] == DEVICE_SESSION_V4_SCHEMA else set()) == expected_top, "top-level fields")
     _require_device_session_v1(manifest.get("sealed") is True, "sealed must be true")
     manifest_id = _require_string(
         manifest.get("manifest_id"), "manifest_id", UUID_V7_PATTERN
@@ -1851,6 +1862,7 @@ def _device_session_v2_source_audio(audio: dict[str, Any]) -> dict[str, Any]:
                     "media_type": segment["artifact"]["media_type"],
                     "bytes": segment["artifact"]["bytes"],
                     "sha256": segment["artifact"]["sha256"],
+                    **({"storage_encoding": segment["artifact"]["storage_encoding"]} if "storage_encoding" in segment["artifact"] else {}),
                 },
             }
             for segment in audio["segments"]
@@ -1865,7 +1877,7 @@ def _read_device_session_v2(
     manifest: dict[str, Any],
 ) -> Session:
     _validate_schema(
-        _device_session_v3_validator() if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else _device_session_v2_validator(),
+        _device_session_v4_validator() if manifest["schema"] == DEVICE_SESSION_V4_SCHEMA else _device_session_v3_validator() if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else _device_session_v2_validator(),
         manifest, "device-session v3" if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else "device-session v2",
     )
     _validate_device_session_v2_invariants(manifest)
@@ -1890,7 +1902,7 @@ def _read_device_session_v2(
         "logs",
         "integrity",
     }
-    _require_device_session_v1(set(manifest) == expected_top, "top-level fields")
+    _require_device_session_v1(set(manifest) - ({"capture_audit"} if manifest["schema"] == DEVICE_SESSION_V4_SCHEMA else set()) == expected_top, "top-level fields")
     _require_device_session_v1(manifest.get("sealed") is True, "sealed must be true")
     manifest_id = _require_string(
         manifest.get("manifest_id"), "manifest_id", UUID_V7_PATTERN
@@ -2093,7 +2105,7 @@ def _read_device_session_v2(
         source_manifest_path=manifest_path,
         source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
         source_manifest_revision=f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}",
-        source_signature={"status": "device_session_v3_sealed" if manifest["schema"] == DEVICE_SESSION_V3_SCHEMA else "device_session_v2_sealed"},
+        source_signature={"status": "device_session_" + manifest["schema"].rsplit(".", 1)[1] + "_sealed"},
         source_manifest_name="manifest.json",
         source_manifest_schema=manifest["schema"],
         source_manifest_size_bytes=len(manifest_bytes),
@@ -2129,7 +2141,7 @@ def _dispatch_root_manifest(
         return _read_device_session_v1(
             directory, manifest_path, manifest_bytes, manifest
         )
-    if schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+    if schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}:
         return _read_device_session_v2(
             directory, manifest_path, manifest_bytes, manifest
         )
@@ -2143,7 +2155,7 @@ def _validate_closed_device_session_take_graph(sessions: list[Session]) -> None:
         session
         for session in sessions
         if session.source_manifest_schema
-        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}
     ]
     if not device_sessions:
         return
@@ -2379,13 +2391,13 @@ def _readable_session_takes(
         session
         for session in sessions
         if session.source_manifest_schema
-        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+        in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}
     ]
     readable = [
         session
         for session in sessions
         if session.source_manifest_schema
-        not in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+        not in {DEVICE_SESSION_V1_SCHEMA, DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}
     ]
     session_ids = Counter(session.session_id for session in device_sessions)
     manifest_ids = Counter(session.manifest_id for session in device_sessions)
@@ -2578,6 +2590,13 @@ def _validate_device_session_v2_audio_wav_bytes(
     raw: bytes,
 ) -> None:
     label = artifact.display_path
+    if segment["artifact"].get("media_type") == "audio/flac":
+        from openaria.bridge.sdk._storage import verify_flac
+        try:
+            verify_flac(raw, source_audio, segment)
+        except (ValueError, subprocess.SubprocessError) as error:
+            raise PipelineError(f"{label} FLAC validation failed: {error}") from error
+        return
     parsed = _parse_pcm_s16le_wav(raw, label)
     if source_audio.get("codec") != "pcm_s16le":
         raise PipelineError(f"{label} audio manifest codec is not pcm_s16le")
@@ -2612,7 +2631,7 @@ def _device_session_v2_audio_segments_by_path(
     session: Session,
 ) -> dict[str, dict[str, Any]]:
     if (
-        session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}
+        session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}
         or session.source_audio.get("state") != "recorded"
     ):
         return {}
@@ -3464,7 +3483,7 @@ def export_sbs(
         prefix=".ylx-sbs-export-", dir=output.parent
     ) as staging_directory:
         staging_output = Path(staging_directory) / "output.mp4"
-        if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+        if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}:
             from openaria.bridge.sdk._media import render_session_video
             from openaria.bridge.sdk.errors import ContractError, ExportError
 
@@ -4246,7 +4265,7 @@ def _normalize_publication_prefix(prefix: str) -> str:
 
 
 def _publication_source_audio(session: Session) -> dict[str, Any]:
-    if session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+    if session.source_manifest_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}:
         raise PipelineError("source_audio is only defined for device-session v2")
     if session.source_audio.get("state") == "recorded":
         return {
@@ -4265,7 +4284,7 @@ def _publication_source_audio(session: Session) -> dict[str, Any]:
 def _publication_contract_for_session(session: Session) -> tuple[str, str]:
     if session.source_manifest_schema == DEVICE_SESSION_V1_SCHEMA:
         return BUCKET_PUBLICATION_V2_SCHEMA, DEVICE_SESSION_V1_SCHEMA
-    if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+    if session.source_manifest_schema in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}:
         return BUCKET_PUBLICATION_V3_SCHEMA, session.source_manifest_schema
     raise PipelineError(
         f"unsupported source manifest schema {session.source_manifest_schema}"
@@ -4285,7 +4304,7 @@ def _validate_bucket_publication(
     elif publication_schema == BUCKET_PUBLICATION_V3_SCHEMA:
         validator = _bucket_publication_v3_validator()
         expected_source_schema = session.source_manifest_schema
-        if expected_source_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA}:
+        if expected_source_schema not in {DEVICE_SESSION_V2_SCHEMA, DEVICE_SESSION_V3_SCHEMA, DEVICE_SESSION_V4_SCHEMA}:
             raise PipelineError("bucket-publication v3 requires a v2/v3 source")
         label = "bucket-publication v3"
     else:
@@ -4805,6 +4824,7 @@ def upload(
         DEVICE_SESSION_V1_SCHEMA,
         DEVICE_SESSION_V2_SCHEMA,
         DEVICE_SESSION_V3_SCHEMA,
+        DEVICE_SESSION_V4_SCHEMA,
     }:
         return _upload_versioned_bucket_publication(
             session,

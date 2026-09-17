@@ -17,6 +17,7 @@ dependencies = [
     "jsonschema[format]>=4.23,<5",
     "textual>=8.2.8,<9",
     "zeroconf>=0.151.2,<1",
+    "zstandard>=0.23,<1",
 ]
 
 [project.scripts]
