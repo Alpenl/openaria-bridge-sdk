@@ -19,6 +19,9 @@ from typing import Any
 
 import imageio_ffmpeg
 
+from ._storage import open_metadata
+from ._frame_index import valid_frame_record
+
 from ._audio_clock import audio_clock_report
 from ._json import load_json
 from .errors import ContractError, ExportError
@@ -100,6 +103,7 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
         "ylx.device-session.v1",
         "ylx.device-session.v2",
         "ylx.device-session.v3",
+        "ylx.device-session.v4",
     }:
         raise ContractError(
             f"automatic media rendering does not support manifest schema {schema!r}"
@@ -236,11 +240,12 @@ def _frame_clock(
     if path.is_symlink() or not path.is_file():
         raise ExportError(f"verified frame index disappeared: {path}")
     timestamps: list[int] = []
-    with path.open("rb") as handle:
+    with open_metadata(path) as handle:
         for index, line in enumerate(handle):
             row = _object(load_json(line, "frame index row"), "frame index row")
             if (
-                row.get("schema") != "ylx.frame-index.v1"
+                (row.get("schema") not in {"ylx.frame-index.v1", "ylx.frame-index.v2"}
+                 or (row.get("schema") == "ylx.frame-index.v2" and not valid_frame_record(row)))
                 or row.get("session_id") != manifest.get("session_id")
                 or isinstance(row.get("frame"), bool)
                 or row.get("frame") != index
