@@ -367,17 +367,18 @@ def render_session_video(
             encode(executable, False)
         _validate_media(executable, staged_output, expect_audio=plan.has_audio)
         if plan.frame_pts_us:
-            _validate_frame_pts(
+            output_frames = _validate_frame_pts(
                 executable,
                 staged_output,
                 plan.frame_pts_us,
                 round(1_000_000 / plan.output_fps),
             )
+        else:
+            output_frames, _ = _count_frames_and_seconds(staged_output)
         size_bytes = staged_output.stat().st_size
         if size_bytes <= 0:
             raise ExportError("FFmpeg created an empty final recording")
         digest = _sha256_file(staged_output)
-        output_frames, _ = _count_frames_and_seconds(staged_output)
         if output_frames != source_frames:
             raise ExportError(
                 "final recording frame count changed during rendering: "
@@ -903,7 +904,8 @@ def _run(arguments: list[str], label: str) -> None:
 
 def _validate_frame_pts(
     executable: str, path: Path, expected: tuple[int, ...], last_duration_us: int
-) -> None:
+) -> int:
+    """Decode and verify every frame, returning the verified frame count."""
     command = [
         executable,
         "-hide_banner",
@@ -964,6 +966,7 @@ def _validate_frame_pts(
             mismatch
             or f"frame timestamp verification failed ({count}/{len(expected)}): {detail}"
         )
+    return count
 
 
 def _sha256_file(path: Path) -> str:

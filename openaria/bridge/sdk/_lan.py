@@ -290,7 +290,11 @@ class DeviceApiClient:
             progress(f"{session.session_id}: 下载时校验历史录制，首次读取可能较慢")
 
         def write_artifact(artifact: ArtifactDescriptor, destination: Path) -> None:
-            self._download_artifact(session.session_id, artifact, destination)
+            # The atomic exporter verifies the closed file's type, size and hash
+            # immediately after this writer returns. Avoid hashing it twice.
+            self._download_artifact(
+                session.session_id, artifact, destination, verify=False
+            )
 
         return export_session_tree(
             source=source,
@@ -440,6 +444,8 @@ class DeviceApiClient:
         session_id: str,
         artifact: ArtifactDescriptor,
         destination: Path,
+        *,
+        verify: bool = True,
     ) -> None:
         # Own the target once, preserving verified-by-offset bytes across transient
         # failures. Never remove or overwrite a pre-existing caller-owned file.
@@ -449,7 +455,9 @@ class DeviceApiClient:
                 _retry_request(
                     lambda: self._download_artifact_once(session_id, artifact, handle)
                 )
-            if not hmac.compare_digest(sha256_file(destination), artifact.sha256):
+            if verify and not hmac.compare_digest(
+                sha256_file(destination), artifact.sha256
+            ):
                 raise ExportError(
                     f"artifact {artifact.path} failed size/SHA-256 verification"
                 )
