@@ -7,6 +7,7 @@ import socket
 import sys
 import threading
 import urllib.parse
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,7 @@ from zeroconf import ServiceInfo
 
 import main as legacy_main
 import openaria.bridge.sdk._export as export_module
+import openaria.bridge.sdk._lan as lan_module
 from openaria.bridge.sdk import (
     ContractError,
     DiscoveryError,
@@ -361,6 +363,15 @@ def test_lan_mode_discovers_probes_and_downloads_without_network_mutation_field(
     monkeypatch.setenv("NO_PROXY", "")
     card = tmp_path / "source"
     manifest_bytes, payloads, artifact_ids = _build_card(card)
+    hashed_paths = []
+    original_hash = export_module.sha256_file
+
+    def hash_file(path):
+        hashed_paths.append(path)
+        return original_hash(path)
+
+    monkeypatch.setattr(export_module, "sha256_file", hash_file)
+    monkeypatch.setattr(lan_module, "sha256_file", hash_file)
     with _device_api(manifest_bytes, payloads, artifact_ids) as endpoint:
         sdk = OpenAriaSDK(
             mode="lan",
@@ -377,6 +388,9 @@ def test_lan_mode_discovers_probes_and_downloads_without_network_mutation_field(
         assert sessions[0].exportable is True
         result = sdk.export(source=sources[0])
 
+    assert Counter(path.name for path in hashed_paths) == Counter(
+        Path(relative).name for relative in payloads
+    )
     destination = result.sessions[0].path
     assert (
         destination == (tmp_path / "lan-export").resolve() / DEVICE_LABEL / SESSION_ID
@@ -416,6 +430,55 @@ def test_lan_digest_mismatch_leaves_no_partial_session(tmp_path: Path) -> None:
     assert not device_root.exists() or not tuple(device_root.glob("*.part"))
     artifact_requests = [path for path in requests if "/artifacts/" in path]
     assert len(artifact_requests) == len(set(artifact_requests))
+
+
+@pytest.mark.parametrize("change", ["replace", "truncate", "symlink"])
+def test_lan_export_verifies_the_file_after_the_writer_returns(
+    tmp_path, monkeypatch, change
+):
+    card = tmp_path / "source"
+    manifest, payloads, artifact_ids = _build_card(card)
+    original_download = lan_module.DeviceApiClient._download_artifact
+
+    def download(self, session_id, artifact, destination, **kwargs):
+        original_download(self, session_id, artifact, destination, **kwargs)
+        if change == "replace":
+            replacement = destination.with_suffix(".replacement")
+            replacement.write_bytes(b"x" * artifact.size_bytes)
+            replacement.replace(destination)
+        elif change == "truncate":
+            destination.write_bytes(b"")
+        else:
+            destination.unlink()
+            destination.symlink_to(card / "recordings" / SESSION_ID / artifact.path)
+
+    monkeypatch.setattr(lan_module.DeviceApiClient, "_download_artifact", download)
+    output = tmp_path / "exports"
+    with _device_api(manifest, payloads, artifact_ids) as endpoint:
+        with pytest.raises(ExportError, match="size/SHA-256"):
+            OpenAriaSDK(endpoint=endpoint, output=output).export()
+    assert not (output / DEVICE_LABEL / SESSION_ID).exists()
+    assert not list(output.rglob("*.part"))
+    for relative, payload in payloads.items():
+        assert (card / "recordings" / SESSION_ID / relative).read_bytes() == payload
+
+
+def test_standalone_lan_download_still_verifies_and_removes_corrupt_file(tmp_path):
+    manifest, payloads, artifact_ids = _build_card(tmp_path / "source")
+    artifact = next(
+        artifact
+        for artifact in artifacts_from_manifest(manifest, SESSION_ID)
+        if artifact.path == next(iter(payloads))
+    )
+    destination = tmp_path / "download"
+    with _device_api(
+        manifest, payloads, artifact_ids, corrupt_first_artifact=True
+    ) as endpoint:
+        with pytest.raises(ExportError, match="SHA-256"):
+            lan_module.DeviceApiClient(endpoint)._download_artifact(
+                SESSION_ID, artifact, destination
+            )
+    assert not destination.exists()
 
 
 def test_gateway_unusable_session_is_visible_but_not_exported(tmp_path: Path) -> None:
