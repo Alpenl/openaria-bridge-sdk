@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -83,6 +84,24 @@ class SDKBackend(Protocol):
 
 
 SDKFactory = Callable[..., SDKBackend]
+
+
+def _is_date_filter(query: str) -> bool:
+    if re.fullmatch(r"\d{4}", query):
+        # A leap year allows February 29 without inventing a recording year.
+        query = "2000" + query
+    for pattern, date_format in (
+        (r"\d{8}", "%Y%m%d"),
+        (r"\d{4}-\d{2}", "%Y-%m"),
+        (r"\d{4}-\d{2}-\d{2}", "%Y-%m-%d"),
+    ):
+        if re.fullmatch(pattern, query):
+            try:
+                datetime.strptime(query, date_format)
+                return True
+            except ValueError:
+                return False
+    return False
 
 
 @dataclass(frozen=True)
@@ -510,6 +529,21 @@ class OpenAriaTUI(App[None]):
                 empty = "正在查找来源…" if self._pending_modes else "尚未发现来源"
             else:
                 empty = "没有匹配的录制" if self._sessions else "此来源没有录制"
+                query = self.query_one("#filter", Input).value.strip()
+                unknown_dates = sum(
+                    session.time_note
+                    in {"设备时钟未校准，录制日期未知", "录制日期无效"}
+                    for session in self._sessions
+                )
+                if (
+                    not visible
+                    and unknown_dates
+                    and _is_date_filter(query)
+                ):
+                    empty = (
+                        f"未找到该日期的录制；另有 {unknown_dates} 条录制日期未知，"
+                        "请清除日期筛选或按名称查找"
+                    )
         self.query_one("#empty-state", Static).update(empty)
         self.query_one("#empty-state").display = not visible
         sessions.display = bool(visible)

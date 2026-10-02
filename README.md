@@ -57,6 +57,11 @@ The recording list uses the full terminal width and adapts to smaller windows.
 Filter by name, session ID, or date. **全选 / 清空** affects only the matching
 recordings; selections outside the filter are retained and counted explicitly.
 The export bar always shows the total selected count and source size.
+When a valid `MMDD`, `YYYYMMDD`, `YYYY-MM`, or `YYYY-MM-DD` date-shaped filter
+matches nothing and the device has
+recordings with an unknown date, the empty list explains how many such recordings
+exist and suggests clearing the filter or searching by name. Their dates and
+selections are preserved; unknown dates are not assigned to the searched day.
 
 Successful exports are marked immediately and deselected; failures remain selected
 for retry. History survives application restarts, destination changes, and switching
