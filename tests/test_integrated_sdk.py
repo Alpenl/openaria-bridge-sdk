@@ -303,6 +303,87 @@ def test_media_render_failure_leaves_no_complete_session(
     assert not device_root.exists() or not tuple(device_root.glob("*.part"))
 
 
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_interrupted_export_removes_owned_staging_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: type[BaseException]
+) -> None:
+    card = tmp_path / "card"
+    manifest, payloads, _ = _build_card(card)
+    output = tmp_path / "export"
+    sdk = OpenAriaSDK(mode="card", card=card, output=output)
+    original_write = export_module._write_json
+
+    def interrupt_receipt(path, document):
+        if path.name == "media.json":
+            raise interruption("export interrupted")
+        return original_write(path, document)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(export_module, "_write_json", interrupt_receipt)
+        with pytest.raises(interruption, match="export interrupted"):
+            sdk.export()
+    device_root = output / DEVICE_LABEL
+    assert not (device_root / SESSION_ID).exists()
+    assert not list(device_root.glob("*.part"))
+    exported = sdk.export().sessions[0]
+    assert exported.media_path.read_bytes() == b"synthetic-final-mp4"
+    source_manifest = next(card.rglob("manifest.json"))
+    assert source_manifest.read_bytes() == manifest
+    for relative, payload in payloads.items():
+        assert (source_manifest.parent / relative).read_bytes() == payload
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("after_publish", [False, True])
+def test_interrupted_legacy_upgrade_preserves_sources_and_can_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: type[BaseException],
+    after_publish: bool,
+) -> None:
+    card = tmp_path / "card"
+    manifest, payloads, _ = _build_card(card)
+    output = tmp_path / "export"
+    legacy = output / DEVICE_LABEL / SESSION_ID
+    legacy.mkdir(parents=True)
+    (legacy / "manifest.json").write_bytes(manifest)
+    for relative, payload in payloads.items():
+        path = legacy / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    sdk = OpenAriaSDK(mode="card", card=card, output=output)
+    original_write = export_module._write_json
+    original_rename = Path.rename
+
+    def interrupt_receipt(path, document):
+        if path.name == "media.json":
+            raise interruption("upgrade interrupted")
+        return original_write(path, document)
+
+    def interrupt_publish(path, target):
+        result = original_rename(path, target)
+        if path == legacy / ".openaria.upgrade.part":
+            raise interruption("upgrade interrupted")
+        return result
+
+    with monkeypatch.context() as patch:
+        if after_publish:
+            patch.setattr(Path, "rename", interrupt_publish)
+        else:
+            patch.setattr(export_module, "_write_json", interrupt_receipt)
+        with pytest.raises(interruption, match="upgrade interrupted"):
+            sdk.export()
+    assert (legacy / FINAL_MEDIA_NAME).exists() == after_publish
+    assert not (legacy / ".openaria.upgrade.part").exists()
+    assert (legacy / ".openaria").exists() == after_publish
+    assert (legacy / "manifest.json").read_bytes() == manifest
+    for relative, payload in payloads.items():
+        assert (legacy / relative).read_bytes() == payload
+    exported = sdk.export().sessions[0]
+    assert exported.media_path.read_bytes() == b"synthetic-final-mp4"
+    assert sdk.export().sessions[0].reused
+
+
 def test_media_cleanup_failure_leaves_no_complete_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
