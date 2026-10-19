@@ -48,7 +48,8 @@ from .options import ExportOptions
 SERVICE_TYPE = "_ylx-capture._tcp.local."
 DEFAULT_DEVICE_API_PORT = 8080
 MAX_JSON_BYTES = 2 * 1024 * 1024
-MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+# Match the device bound, including complete long recovery clock evidence.
+MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 MAX_ERROR_BYTES = 4096
 MAX_SESSIONS = 10_000
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
