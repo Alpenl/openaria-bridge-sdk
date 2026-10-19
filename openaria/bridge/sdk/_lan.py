@@ -18,7 +18,8 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -54,6 +55,7 @@ MAX_ERROR_BYTES = 4096
 MAX_SESSIONS = 10_000
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_REQUEST_ATTEMPTS = 3
+MAX_RETRY_WAIT_SECONDS = 30.0
 MAX_PROBE_WORKERS = 8
 PROBE_TIMEOUT = 3.0
 ARTIFACT_TIMEOUT = 120.0
@@ -61,21 +63,51 @@ RETRYABLE_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class _RetryableRequestError(DiscoveryError):
-    """A read-only request may succeed after a transient transport failure."""
+    """An idempotent request may succeed after a transient transport failure."""
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class _CatalogChangedError(ContractError):
     """Pagination must restart to avoid mixing different catalog snapshots."""
 
 
+def _retry_after_seconds(headers: Any) -> float | None:
+    value = _single_header(headers, "Retry-After")
+    if not value:
+        return None
+    if value.isascii() and value.isdecimal():
+        digits = value.lstrip("0") or "0"
+        # Huge but valid delays must stop retries, not overflow or fall back to
+        # an earlier retry. Avoid converting an unbounded decimal integer.
+        return float(int(digits)) if len(digits) <= 9 else math.inf
+    try:
+        date = parsedate_to_datetime(value)
+        if date.tzinfo is None:
+            date = date.replace(tzinfo=UTC)
+        delay = date.timestamp() - time.time()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0.0, delay) if math.isfinite(delay) else None
+
+
 def _retry_request[T](operation: Callable[[], T]) -> T:
+    waited = 0.0
     for attempt in range(MAX_REQUEST_ATTEMPTS):
         try:
             return operation()
-        except _RetryableRequestError:
+        except _RetryableRequestError as error:
             if attempt == MAX_REQUEST_ATTEMPTS - 1:
                 raise
-            time.sleep(0.15 * 2**attempt)
+            delay = max(0.15 * 2**attempt, error.retry_after_seconds or 0.0)
+            if not math.isfinite(delay) or delay > MAX_RETRY_WAIT_SECONDS - waited:
+                # If the requested wait exceeds our budget, return the temporary
+                # failure to the caller instead of retrying before the server asks.
+                raise
+            time.sleep(delay)
+            waited += delay
     raise AssertionError("unreachable retry state")
 
 
@@ -589,7 +621,10 @@ class DeviceApiClient:
                 request, timeout=self.timeout if timeout is None else timeout
             )
         except urllib.error.HTTPError as error:
+            retry_after = None
             try:
+                if error.code in RETRYABLE_HTTP_CODES:
+                    retry_after = _retry_after_seconds(error.headers)
                 detail = (
                     error.read(MAX_ERROR_BYTES)
                     .decode("utf-8", errors="replace")
@@ -599,14 +634,12 @@ class DeviceApiClient:
                 detail = str(error.reason)
             finally:
                 error.close()
-            error_type = (
-                _RetryableRequestError
-                if error.code in RETRYABLE_HTTP_CODES
-                else DiscoveryError
-            )
-            raise error_type(
-                f"Device API request failed with HTTP {error.code}: {detail or error.reason}"
-            ) from error
+            message = f"Device API request failed with HTTP {error.code}: {detail or error.reason}"
+            if error.code in RETRYABLE_HTTP_CODES:
+                raise _RetryableRequestError(
+                    message, retry_after_seconds=retry_after
+                ) from error
+            raise DiscoveryError(message) from error
         except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
             reason = getattr(error, "reason", error)
             raise _RetryableRequestError(
@@ -614,13 +647,18 @@ class DeviceApiClient:
             ) from error
         status = getattr(response, "status", response.getcode())
         if status not in accepted_statuses:
-            response.close()
-            error_type = (
-                _RetryableRequestError
-                if status in RETRYABLE_HTTP_CODES
-                else DiscoveryError
-            )
-            raise error_type(f"Device API returned unexpected HTTP {status}")
+            try:
+                retry_after = (
+                    _retry_after_seconds(response.headers)
+                    if status in RETRYABLE_HTTP_CODES
+                    else None
+                )
+            finally:
+                response.close()
+            message = f"Device API returned unexpected HTTP {status}"
+            if status in RETRYABLE_HTTP_CODES:
+                raise _RetryableRequestError(message, retry_after_seconds=retry_after)
+            raise DiscoveryError(message)
         return response
 
 
