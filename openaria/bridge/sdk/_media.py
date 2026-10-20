@@ -32,7 +32,7 @@ VIDEO_CRF = 20
 AUDIO_BITRATE = "192k"
 COMMAND_ERROR_LIMIT = 4000
 RENDERER_NAME = "openaria-ffmpeg-sbs"
-RENDERER_VERSION = 5
+RENDERER_VERSION = 6
 
 
 @dataclasses.dataclass(frozen=True)
@@ -188,7 +188,10 @@ def build_media_plan(session_root: Path, manifest_bytes: bytes) -> MediaPlan:
             )
         except (ValueError, TypeError, KeyError) as error:
             raise ContractError(f"invalid audio clock: {error}") from error
-        if clock_report["continuity"] == "verified":
+        if (
+            clock_report["continuity"] == "verified"
+            and clock_report.get("mapping") != "piecewise-linear"
+        ):
             audio_tempo = clock_report["actual_sample_rate"] / audio["sample_rate"]
         audio_segments = _ordered_segments(audio.get("segments"), "audio")
         audio_paths = tuple(
@@ -474,7 +477,7 @@ def build_ffmpeg_arguments(
         filters.append(_audio_filter(plan, audio_input_index))
 
     if filters:
-        if plan.frame_pts_us:
+        if plan.frame_pts_us or plan.audio_clock.get("mapping") == "piecewise-linear":
             script = workdir / "timeline.fffilter"
             script.write_text(";".join(filters), encoding="ascii")
             arguments.extend(["-filter_complex_script", str(script)])
@@ -594,12 +597,48 @@ def build_ffmpeg_arguments(
     return arguments
 
 
+def _audio_pts_expression(timeline: list[list[int | float]]) -> str:
+    """Balanced sample-to-time expression; timestamps are relative to audio start."""
+    if len(timeline) < 2 or timeline[0][0] != 0:
+        raise ContractError("audio sample timeline must start at sample zero")
+    for (a, t), (b, u) in pairwise(timeline):
+        if (
+            type(a) is not int or type(b) is not int or not 0 <= a < b
+            or not math.isfinite(t) or not math.isfinite(u) or not t < u
+        ):
+            raise ContractError("audio sample timeline must be finite and increasing")
+    origin = timeline[0][1]
+
+    def build(lo: int, hi: int) -> str:
+        if hi - lo == 1:
+            a, t = timeline[lo]
+            b, u = timeline[hi]
+            return f"({(t-origin)*1e9:.6f}+(N-{a})*{(u-t)*1e9/(b-a):.12f})"
+        mid = (lo + hi) // 2
+        return f"if(lt(N,{timeline[mid][0]}),{build(lo, mid)},{build(mid, hi)})"
+
+    return build(0, len(timeline) - 1)
+
+
 def _audio_filter(plan: MediaPlan, input_index: int) -> str:
     offset = plan.audio_offset_seconds
     if offset is None:
         raise ContractError("audio media plan omitted its timeline offset")
     chain = f"[{input_index}:a:0]aresample=async=0:first_pts=0"
-    if abs(plan.audio_tempo - 1.0) > 1e-9:
+    if plan.audio_clock.get("mapping") == "piecewise-linear":
+        rate = plan.audio_sample_rate
+        if rate is None or rate <= 0:
+            raise ContractError("audio sample clock requires a positive sample rate")
+        expression = _audio_pts_expression(plan.audio_clock["sample_timeline"])
+        # Short frames expose changes in clock slope to the resampler. All
+        # correction is gradual; no silence insertion or hard sample removal.
+        chain += (
+            f",asetnsamples=n={max(1, round(rate / 100))}:p=0"
+            f",asettb=1/1000000000,asetpts='{expression}'"
+            f",aresample={rate}:async={rate * 0.02:g}:min_comp=0.000001"
+            ":min_hard_comp=1000:comp_duration=1:first_pts=0"
+        )
+    elif abs(plan.audio_tempo - 1.0) > 1e-9:
         rate = plan.audio_sample_rate
         if rate is None or rate <= 0:
             raise ContractError("audio sample clock requires a positive sample rate")
