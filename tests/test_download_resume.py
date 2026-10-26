@@ -95,3 +95,25 @@ def test_artifact_has_separate_timeout_budget(tmp_path, monkeypatch):
         client._download_artifact("session", artifact, tmp_path / "video")
         assert timeouts == [_lan.ARTIFACT_TIMEOUT, _lan.ARTIFACT_TIMEOUT]
         assert client.timeout == 0.01
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_long_recovery_manifest_response_remains_bounded(declared):
+    import io
+    from email.message import Message
+
+    from openaria.bridge.sdk.errors import ContractError
+
+    payload = b"x" * (20 * 1024 * 1024)
+    response = io.BytesIO(payload)
+    response.headers = Message()
+    if declared:
+        response.headers["Content-Length"] = str(len(payload))
+    assert _lan._read_limited(response, _lan.MAX_MANIFEST_BYTES, "manifest") == payload
+
+    oversized = io.BytesIO(b"x" * (33 * 1024 * 1024))
+    oversized.headers = Message()
+    if declared:
+        oversized.headers["Content-Length"] = str(33 * 1024 * 1024)
+    with pytest.raises(ContractError, match="exceeds"):
+        _lan._read_limited(oversized, _lan.MAX_MANIFEST_BYTES, "manifest")

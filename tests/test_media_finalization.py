@@ -11,6 +11,7 @@ import imageio_ffmpeg
 import pytest
 from PIL import Image
 
+from openaria.bridge.sdk import _media
 from openaria.bridge.sdk._media import (
     MediaPlan,
     build_ffmpeg_arguments,
@@ -57,7 +58,16 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
     offsets: list[int],
     codec: str,
     compressed: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    counted_paths = []
+    original_count = _media._count_frames_and_seconds
+
+    def count(path):
+        counted_paths.append(path)
+        return original_count(path)
+
+    monkeypatch.setattr(_media, "_count_frames_and_seconds", count)
     for eye in ("left", "right"):
         for index in range(2):
             _video(tmp_path / "video" / f"{eye}_{index:05d}.mp4", "red")
@@ -113,6 +123,10 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
         tmp_path, json.dumps(manifest).encode(), output, video_codec=codec
     )
 
+    # The full timestamp validation already decodes and counts the output.
+    # Only the four input segments need a separate counting pass.
+    assert len(counted_paths) == 4
+    assert all(path.parent == tmp_path / "video" for path in counted_paths)
     frames, duration = imageio_ffmpeg.count_frames_and_secs(str(output))
     assert frames == rendered.video_frame_count == 8
     assert rendered.output_fps == pytest.approx(1_000_000_000 / interval_ns)
@@ -141,6 +155,32 @@ def test_render_preserves_frame_clock_instead_of_nominal_playback_speed(
         abs=0.00001,
     )
     assert (b"hvc1" if codec == "hevc" else b"avc1") in output.read_bytes()
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "extra", "timestamp", "duration"])
+def test_frame_clock_validator_counts_only_fully_verified_output(tmp_path, fault):
+    output = tmp_path / "video.mp4"
+    _video(output, "red")
+    expected = (0, 100_000, 200_000, 300_000)
+    duration = 100_000
+    if fault == "missing":
+        expected += (400_000,)
+    elif fault == "extra":
+        expected = expected[:-1]
+    elif fault == "timestamp":
+        expected = (1, *expected[1:])
+    elif fault == "duration":
+        duration += 1
+
+    if fault is None:
+        assert _media._validate_frame_pts(
+            imageio_ffmpeg.get_ffmpeg_exe(), output, expected, duration
+        ) == 4
+    else:
+        with pytest.raises(ExportError, match="timestamp|duration"):
+            _media._validate_frame_pts(
+                imageio_ffmpeg.get_ffmpeg_exe(), output, expected, duration
+            )
 
 
 def test_legacy_export_sbs_v2_uses_the_same_capture_clock(tmp_path: Path) -> None:
@@ -423,6 +463,14 @@ def test_render_session_video_merges_segments_hstacks_and_trims_early_audio(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    counted_paths = []
+    original_count = _media._count_frames_and_seconds
+
+    def count(path):
+        counted_paths.append(path)
+        return original_count(path)
+
+    monkeypatch.setattr(_media, "_count_frames_and_seconds", count)
     # A GPU can disappear or reject a recording after its initial capability
     # probe. Exercise fallback while retaining all image/audio assertions.
     monkeypatch.setattr(
@@ -440,6 +488,9 @@ def test_render_session_video_merges_segments_hstacks_and_trims_early_audio(
 
     rendered = render_session_video(source, manifest, output, messages.append)
 
+    # Legacy manifests have no frame clock, so their output still needs counting.
+    assert len(counted_paths) == 5
+    assert counted_paths[-1].name == "recording.mp4"
     assert rendered.path == output
     assert rendered.video_segment_count == 2
     assert rendered.audio_segment_count == 2
@@ -491,15 +542,30 @@ def test_media_plan_delays_audio_that_started_after_video(tmp_path: Path) -> Non
     assert "apad=whole_dur=1,atrim=end=1[audio]" in filters
 
 
-def test_real_device_manifest_uses_audio_sync_clock_for_alignment() -> None:
-    root = Path(
-        "/data2/openaria-sdk-hardware-20260831/exports-tui-fresh-0ae5728/"
-        "YLX-BA9D3B63/01a05321-e0ee-72a7-a017-0e214f9d42d8"
+def test_real_device_manifest_uses_audio_sync_clock_for_alignment(tmp_path) -> None:
+    # Preserve the clocks measured on the device without depending on a local
+    # historical export whose source media may already have been cleaned up.
+    manifest = _multi_segment_manifest()
+    video_start = 0.98904022
+    audio_start = 0.973346574
+    manifest["audio"]["sync"].update(
+        start_time_seconds=audio_start, end_time_seconds=audio_start + 1
     )
-    if not root.is_dir():
-        return
+    for index, segment in enumerate(manifest["video"]["segments"]):
+        segment.update(
+            start_time_seconds=video_start + index * 0.4,
+            end_time_seconds=video_start + (index + 1) * 0.4,
+        )
+        for artifact in segment["artifacts"].values():
+            path = tmp_path / artifact["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+    for segment in manifest["audio"]["segments"]:
+        path = tmp_path / segment["artifact"]["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
 
-    plan = build_media_plan(root, (root / "manifest.json").read_bytes())
+    plan = build_media_plan(tmp_path, json.dumps(manifest).encode())
 
     assert plan.video_start_time_seconds == 0.98904022
     assert plan.audio_start_time_seconds == 0.973346574

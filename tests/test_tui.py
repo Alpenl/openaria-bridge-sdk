@@ -567,6 +567,67 @@ def test_filter_preserves_hidden_selection_and_bulk_actions_exclude_unavailable(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("query", "time_note", "expected_hint"),
+    [
+        ("2026-09-17", "设备时钟未校准，录制日期未知", True),
+        ("0917", "设备时钟未校准，录制日期未知", True),
+        ("20260917", "设备时钟未校准，录制日期未知", True),
+        ("0229", "设备时钟未校准，录制日期未知", True),
+        ("1234", "设备时钟未校准，录制日期未知", False),
+        ("0230", "设备时钟未校准，录制日期未知", False),
+        ("20260230", "设备时钟未校准，录制日期未知", False),
+        ("2026-09", "录制日期无效", True),
+        ("missing name", "设备时钟未校准，录制日期未知", False),
+        ("2026-09-17", None, False),
+        ("2026-09-17", "时间由结束时间和录制时长推算", False),
+    ],
+)
+def test_empty_date_filter_explains_unknown_recordings_without_changing_selection(
+    tmp_path: Path, query: str, time_note: str | None, expected_hint: bool
+) -> None:
+    async def scenario() -> None:
+        factory = FakeSDKFactory(tmp_path / "card")
+        recording = dataclasses.replace(
+            READY_SESSION,
+            display_name="卧室2",
+            started_at="2000-01-01T09:57:33+08:00"
+            if expected_hint or time_note == "设备时钟未校准，录制日期未知"
+            else "2026-09-16T09:57:33+08:00",
+            time_note=time_note,
+        )
+        factory.sessions[SourceMode.LAN] = (recording,)
+        app = OpenAriaTUI(default_output=tmp_path, sdk_factory=factory)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _wait_for(
+                pilot, lambda: len(app._sources) == 2 and not app._sessions_loading
+            )
+            before = set(app._selected_ids)
+            field = app.query_one("#filter", Input)
+            field.value = query
+            await pilot.pause()
+            empty = app.query_one("#empty-state", Static)
+            assert empty.display
+            if expected_hint:
+                assert str(empty.content) == (
+                    "未找到该日期的录制；另有 1 条录制日期未知，"
+                    "请清除日期筛选或按名称查找"
+                )
+            else:
+                assert str(empty.content) == "没有匹配的录制"
+            assert app._filtered_sessions() == ()
+            assert app._selected_ids == before
+            assert not factory.export_calls
+            field.value = "卧室2"
+            await pilot.pause()
+            assert app._filtered_sessions() == (recording,)
+            assert not empty.display
+            assert app._selected_ids == before
+            assert not app.query_one("#export", Button).disabled
+
+    asyncio.run(scenario())
+
+
 def test_source_navigation_requires_commit(tmp_path: Path) -> None:
     async def scenario() -> None:
         factory = FakeSDKFactory(tmp_path / "card")

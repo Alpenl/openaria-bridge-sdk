@@ -394,7 +394,8 @@ def export_session_tree(
             ),
         )
         staging.rename(final_directory)
-    except Exception:
+    except BaseException:
+        # Cancellation must release our private copy just like an I/O failure.
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
@@ -638,9 +639,9 @@ def _upgrade_legacy_export(
         published = True
         _remove_legacy_source_tree(directory, manifest_name, artifacts)
         return rendered
-    except Exception:
+    except BaseException:
         shutil.rmtree(temporary_internal, ignore_errors=True)
-        if not published and rendered is not None:
+        if not published and not final_internal.exists() and rendered is not None:
             output.unlink(missing_ok=True)
         raise
 

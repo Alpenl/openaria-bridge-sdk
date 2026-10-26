@@ -378,7 +378,8 @@ def _device_session_v2_validator() -> Draft202012Validator:
     # Conductor's versioned clock extension does not modify the frozen vendor pin.
     schema["$defs"]["recordedAudio"]["properties"]["capture_clock"] = {
         "type": "object", "required": ["schema"],
-        "properties": {"schema": {"const": "openaria.audio-clock.v1"}},
+        # audio_clock_report validates the exact version-specific evidence.
+        "properties": {"schema": {"enum": ["openaria.audio-clock.v1", "openaria.audio-clock.v2"]}},
     }
     return Draft202012Validator(
         schema,
