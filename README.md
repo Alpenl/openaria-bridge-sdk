@@ -1,5 +1,11 @@
 # Open Aria Bridge / SDK
 
+For the native Chinese desktop card exporter (macOS, Windows, Ubuntu), see
+[Open Aria Exporter](desktop/exporter/README.md). Its installers are built by the
+**Desktop Exporter** GitHub Actions workflow, with independent `exporter-v*`
+release tags. The Python SDK and terminal application below retain their own
+installation flow and `v*` releases.
+
 Open Aria Bridge finds recordings on the local network or a mounted recording
 card, verifies every source file, and automatically produces playable videos.
 The ordinary product entry point is a full-screen terminal interface with no
