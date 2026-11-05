@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+[ "${3:-/}" = / ] || exit 1
+config=/Library/PrivilegedHelperTools/dev.alpen.openaria-exporter.uid
+helper=/Library/PrivilegedHelperTools/dev.alpen.openaria-exporter.helper
+plist=/Library/LaunchDaemons/dev.alpen.openaria-exporter.plist
+umask 077
+# Preserve the original binding on upgrades. Never package a UID config payload.
+if [ ! -e "$config" ]; then
+ uid=$(/usr/bin/stat -f %u /dev/console)
+ case "$uid" in ''|*[!0-9]*|0|4294967295) echo 'No valid console user' >&2; exit 1;; esac
+ /usr/bin/id -nu "$uid" >/dev/null
+ (set -C; printf '%s\n' "$uid" > "$config")
+fi
+[ ! -L "$config" ] && [ -f "$config" ] || exit 1
+/usr/sbin/chown root:wheel "$config" "$helper" "$plist"
+/bin/chmod 600 "$config"
+/bin/chmod 755 "$helper"
+/bin/chmod 644 "$plist"
+# The GUI bundle belongs to the originally authorized user so its updater can
+# move/replace it. Keep privileged service files outside this ownership change.
+uid=$(/bin/cat "$config")
+case "$uid" in ''|*[!0-9]*|0|4294967295) echo 'Invalid saved UID' >&2; exit 1;; esac
+/usr/bin/id -nu "$uid" >/dev/null
+app='/Applications/Open Aria Exporter.app'
+[ ! -L "$app" ] && [ -d "$app" ] || { echo 'App must be a real directory' >&2; exit 1; }
+# Physical traversal: change links themselves, never their external targets.
+/usr/sbin/chown -R -P -h -x -n "$uid" "$app"
+[ ! -L /Library/Logs/OpenAriaExporter ] || exit 1
+/usr/bin/install -d -o root -g wheel -m 700 /Library/Logs/OpenAriaExporter
+/bin/launchctl bootout system/dev.alpen.openaria-exporter 2>/dev/null || true
+/bin/launchctl bootstrap system "$plist"
+# Drops to configured UID, verifies root peer and protocol using the actual socket.
+"$helper" --check || { echo 'Service handshake failed; installation is not ready' >&2; exit 1; }
+echo 'Open Aria Exporter service handshake succeeded'
