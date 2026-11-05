@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -186,7 +187,10 @@ class LinuxRuntimeTests(unittest.TestCase):
             package.copy_linux_media(src,root/'stage')
             folder=root/'stage/resources/linux-amd64'
             self.assertEqual((folder/'ffmpeg').read_bytes(),elf)
-            self.assertEqual((folder/'ffprobe').stat().st_mode & 0o777,0o755)
+            # Windows exposes read-only flags, not POSIX executable mode bits.
+            # Linux/macOS runners verify the actual 0755 installation mode.
+            if os.name != 'nt':
+                self.assertEqual((folder/'ffprobe').stat().st_mode & 0o777,0o755)
             self.assertEqual((folder/'FFmpeg-LICENSE.txt').read_text(),'license')
             (src/'LICENSE').unlink()
             with self.assertRaisesRegex(SystemExit,'Missing Linux media dependency'):

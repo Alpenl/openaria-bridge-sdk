@@ -4,7 +4,7 @@
 
 ## 触发与检查
 
-- main、客户端开发分支的相关文件 push，以及涉及客户端的 pull request：执行三系统原生测试和完整安装包构建。
+- main 的相关文件 push，以及涉及客户端的 pull request：执行三系统原生测试和完整安装包构建。开发分支通过 PR 验证，避免同一提交在 push 和 PR 两处重复构建。
 - `workflow_dispatch`：合入默认分支后可在 Actions 页面选择目标分支手动运行。
 - `exporter-v<版本>` 标签：必须与 `desktop/exporter/mygo.json` 版本完全一致，三平台通过后创建 Release 草稿。
 - 普通检查只有 `contents: read`，不读取签名密钥；checkout 不保留推送凭据。仅标签触发的草稿任务有 `contents: write`。

@@ -2,7 +2,7 @@ name: Desktop Exporter
 
 on:
   push:
-    branches: [main, 'feat/desktop-exporter', 'fix/exporter-*']
+    branches: [main]
     tags: ['exporter-v*']
     paths:
       - 'desktop/exporter/**'
