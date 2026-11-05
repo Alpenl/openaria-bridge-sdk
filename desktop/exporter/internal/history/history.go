@@ -60,7 +60,9 @@ func (s Store) open() (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", sqliteutil.FileURI(s.Path)+"?_pragma=busy_timeout(5000)&_txlock=immediate")
+	// Windows can spend several seconds flushing another client's commit on a
+	// busy volume. Keep contention bounded, but allow that writer to finish.
+	db, err := sql.Open("sqlite", sqliteutil.FileURI(s.Path)+"?_pragma=busy_timeout(30000)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +70,7 @@ func (s Store) open() (*sql.DB, error) {
 	// Acquire the writer reservation before reading or changing the schema.
 	// Concurrent first opens must not try to upgrade separate schema read locks
 	// while another client's writer is waiting to commit (SQLITE_BUSY).
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -103,7 +105,7 @@ func (s Store) Record(v core.Session, dst string) (Mark, error) {
 	}
 	defer db.Close()
 	// A published output must be recorded even if the export batch was cancelled.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
