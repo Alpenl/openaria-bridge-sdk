@@ -89,6 +89,9 @@ jobs:
         run: |
           go test -count=1 -timeout=10m ./...
           go vet ./...
+      - name: Stress Windows history concurrency
+        if: runner.os == 'Windows'
+        run: go test -count=5 -run TestConcurrentClientsAndCorruptStore -timeout=3m ./internal/history
       - name: Check data races
         if: runner.os != 'Windows'
         run: go test -race -count=1 -timeout=10m ./...

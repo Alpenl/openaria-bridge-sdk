@@ -60,16 +60,31 @@ func (s Store) open() (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", sqliteutil.FileURI(s.Path)+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteutil.FileURI(s.Path)+"?_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS marks(volume TEXT NOT NULL,session TEXT NOT NULL,revision TEXT NOT NULL,exported_at TEXT NOT NULL,output TEXT NOT NULL,PRIMARY KEY(volume,session,revision));
- CREATE TABLE IF NOT EXISTS outputs(id INTEGER PRIMARY KEY,volume TEXT NOT NULL,session TEXT NOT NULL,path TEXT NOT NULL UNIQUE,receipt TEXT NOT NULL);`)
+	// Acquire the writer reservation before reading or changing the schema.
+	// Concurrent first opens must not try to upgrade separate schema read locks
+	// while another client's writer is waiting to commit (SQLITE_BUSY).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("开始本机记录初始化事务：%w", err)
+	}
+	_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS marks(volume TEXT NOT NULL,session TEXT NOT NULL,revision TEXT NOT NULL,exported_at TEXT NOT NULL,output TEXT NOT NULL,PRIMARY KEY(volume,session,revision));
+ CREATE TABLE IF NOT EXISTS outputs(id INTEGER PRIMARY KEY,volume TEXT NOT NULL,session TEXT NOT NULL,path TEXT NOT NULL UNIQUE,receipt TEXT NOT NULL);`)
+	if err == nil {
+		err = tx.Commit()
+	} else {
+		tx.Rollback()
+	}
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("初始化本机记录表：%w", err)
 	}
 	return db, nil
 }

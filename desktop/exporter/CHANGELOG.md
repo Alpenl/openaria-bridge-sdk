@@ -6,6 +6,7 @@
 - 新增三平台原生回归、完整安装包构建、包内媒体烟雾测试、SHA256 和 GitHub Actions 构建产物。
 - macOS 完整包附带 FFmpeg/ffprobe 及重定位动态库，不再依赖用户安装 Homebrew。
 - Windows/Linux 媒体依赖固定到可审计的上游版本及 SHA256；构建失败时不上传不完整安装包。
+- 本机历史初始化和写入使用 immediate 事务，避免多个客户端同时初始化数据库时的锁升级争用；CI 重复验证 Windows 并发写入。
 
 ## 0.1.4
 
