@@ -205,6 +205,8 @@ type Options struct {
 	Playback, Hardware bool
 	Serial             bool
 	VideoOnly          bool
+	RawFallback        bool // Preserve unprocessed media if video processing fails.
+	rawOnly            bool
 	stream             *mediaStream
 	batchTestWorkers   int
 	transferTest       *transferTestHooks
@@ -221,12 +223,12 @@ type Receipt struct {
 	Provenance   map[string]string
 }
 
-func Export(ctx context.Context, s source.Source, v Session, o Options) (result string, exportErr error) {
+func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (result string, exportErr error) {
 	if o.VideoOnly {
 		o.Playback = true
 		for _, tool := range []string{"ffmpeg", "ffprobe"} {
 			if _, err := mediaTool(tool); err != nil {
-				return "", err
+				return "", &processingError{err}
 			}
 		}
 	}
@@ -244,6 +246,9 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (result 
 	}
 	if o.VideoOnly {
 		mode = "video"
+	}
+	if o.rawOnly {
+		mode = "raw"
 	}
 	key := sha256.Sum256(v.Raw)
 	receipt := Receipt{v.ID, hex.EncodeToString(key[:]), mode, "逐文件 SHA256 已验证", "未执行完整 schema/录制完整性认证", "未验证同步", map[string]string{}, map[string]string{}}
@@ -375,7 +380,7 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (result 
 	for _, a := range v.Artifacts {
 		expect[a.Path] = a
 	}
-	if o.VideoOnly {
+	if o.VideoOnly || o.rawOnly {
 		expect = mediaArtifacts(v)
 		selected := make([]Artifact, 0, len(expect))
 		for _, a := range files {
@@ -419,7 +424,20 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (result 
 	if free < required+(16<<20) {
 		return "", fmt.Errorf("目标空间不足：需要 %d，可用 %d", required+(16<<20), free)
 	}
-	if !o.VideoOnly {
+	if o.rawOnly {
+		// Raw fallback is a new, independently locked output, never a video success.
+		defer func() {
+			data.Close()
+			if exportErr != nil {
+				exportErr = errors.Join(exportErr, st.RemoveAll("source"), st.RemoveAll("work"))
+			}
+		}()
+		if e = copyRawMedia(ctx, s, v, o, data, files); e != nil {
+			return "", e
+		}
+		receipt.Integrity = "逐文件复制并核对字节数；未校验媒体 SHA256"
+		receipt.Timing = "原始分段，未拼接、未转码，音画同步未处理"
+	} else if !o.VideoOnly {
 		if e = transfer(ctx, s, v, o, st, data, files, &receipt, timings); e != nil {
 			return "", e
 		}
@@ -446,7 +464,13 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (result 
 			defer g.Close()
 		}
 		if e = renderStreaming(ctx, filepath.Join(o.Output, stage), v, g, o.Progress, timings); e != nil {
-			return "", e
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if readErr := g.Err(); readErr != nil {
+				return "", readErr
+			}
+			return "", &processingError{e}
 		}
 	} else if o.Playback {
 		for _, seg := range v.Manifest.Video.Segments {
@@ -481,6 +505,18 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (result 
 		b, _ := json.MarshalIndent(receipt, "", "  ")
 		if e = writeNew(st, "receipt.json", b); e != nil {
 			return "", e
+		}
+		if o.rawOnly {
+			const note = "视频处理未完成。source 文件夹保存的是卡内原始左右眼视频、音频分段和 manifest.json，未拼接、未转码，也未重建音画同步。\n这不是合并成品；应用未将其标记为合并导出成功。卡内数据未修改。\n"
+			if e = targetSafe(st, "UNPROCESSED.txt"); e != nil {
+				return "", e
+			}
+			if e = writeNew(st, "UNPROCESSED.txt", []byte(note)); e != nil {
+				return "", e
+			}
+			if e = st.RemoveAll("work"); e != nil {
+				return "", e
+			}
 		}
 	}
 	if e = ctx.Err(); e != nil {

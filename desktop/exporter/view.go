@@ -54,6 +54,7 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.localActionDialog(c)
+	a.exportWarningDialog(c)
 }
 
 func sectionTitle(c *ui.Context, s string) ui.Element {
@@ -126,7 +127,7 @@ func (a *app) sidebar(c *ui.Context) {
 					})
 				})
 				ui.Text(c, "自动保存到所选位置下的 OpenAriaExporter 文件夹").FontSize(11).TextColor(t.TextMuted)
-				ui.Text(c, "合并所有分段，生成左右拼接 MP4；不保留源文件副本").FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "正常生成左右拼接 MP4；处理失败时保存原始分段并弹窗提示").FontSize(11).TextColor(t.TextMuted)
 			})
 		})
 	})

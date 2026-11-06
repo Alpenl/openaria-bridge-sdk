@@ -33,6 +33,7 @@ type app struct {
 	scanned                         string
 	held                            source.Source
 	localAction                     *localAction
+	exportWarning                   *exportWarning
 	// exporting 区分扫描与导出；progress 为批量导出进度，负数表示时长未知。
 	exporting, failed, succeeded bool
 	progress                     float64
@@ -113,7 +114,7 @@ func (a *app) run(export bool) {
 					batchTotal += core.MediaBytes(v)
 				}
 				completed := 0
-				_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: out, VideoOnly: true}, func(index int, p core.Progress) {
+				_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: out, VideoOnly: true, RawFallback: true}, func(index int, p core.Progress) {
 					text := progressText(p, index+1, len(selected), completedBytes, batchTotal)
 					a.update(func() { a.status = text; a.progress = -1 })
 				}, func(index int, dst string) {
@@ -144,6 +145,14 @@ func (a *app) run(export bool) {
 
 			if e != nil {
 				a.setStatus(e.Error(), true)
+				if export {
+					var raw *core.RawFallbackError
+					title := "导出未完成"
+					if errors.As(e, &raw) {
+						title = "视频未处理，已保存原始文件"
+					}
+					a.exportWarning = &exportWarning{open: true, title: title, detail: e.Error()}
+				}
 				if !export && s != nil {
 					s.Close()
 				}
@@ -220,7 +229,7 @@ func cli() error {
 		return fmt.Errorf("没有匹配 session")
 	}
 	var historyErr error
-	_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: *out, Serial: *serial, VideoOnly: true}, func(i int, p core.Progress) {
+	_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: *out, Serial: *serial, VideoOnly: true, RawFallback: true}, func(i int, p core.Progress) {
 		fmt.Fprintf(os.Stderr, "条目 %d/%d %s %s\n", i+1, len(selected), p.Stage, p.File)
 	}, func(i int, p string) {
 		fmt.Println(p)

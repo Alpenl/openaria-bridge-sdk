@@ -203,7 +203,7 @@ func render(ctx context.Context, dir string, v Session, hw bool, progress func(P
 			filter += fmt.Sprintf(";[2:a]atrim=start=%.9f,asetpts=PTS-STARTPTS,apad,atrim=duration=%.9f[a]", -offset, duration)
 		}
 	}
-	args = append(args, "-filter_complex", filter, "-map", "[v]", "-fps_mode", "passthrough")
+	args = append(args, "-filter_complex", filter, "-map", "[v]", "-fps_mode", "passthrough", "-enc_time_base:v", "filter")
 	if len(audio) > 0 {
 		args = append(args, "-map", "[a]", "-c:a", "aac")
 	}

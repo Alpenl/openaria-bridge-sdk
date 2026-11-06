@@ -198,7 +198,10 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 			}
 			args = append(args, "-threads", "2", "-protocol_whitelist", "file,http,tcp", "-f", "concat", "-safe", "0", "-i", p)
 		}
-		args = append(args, "-filter_complex", filter, "-map", mapped, "-fps_mode", "passthrough")
+		// Framesync can emit closely spaced frames from the two capture clocks.
+		// Keep the filter time base: the default 1/framerate encoder time base
+		// rounds distinct timestamps together, causing duplicate DTS in MP4.
+		args = append(args, "-filter_complex", filter, "-map", mapped, "-fps_mode", "passthrough", "-enc_time_base:v", "filter")
 		if len(audio) > 0 {
 			args = append(args, "-map", "[a]", "-c:a", "aac", "-shortest", "-shortest_buf_duration", "0.1")
 		}
