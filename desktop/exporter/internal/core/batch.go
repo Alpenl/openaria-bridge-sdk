@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"openaria-exporter/internal/source"
 	"path"
@@ -29,15 +30,14 @@ func ExportBatch(ctx context.Context, s source.Source, vs []Session, o Options, 
 		duration += mediaDuration(v)
 	}
 	if len(vs) > 1 && duration >= 120 && !o.Serial {
-		ff, e := mediaTool("ffmpeg")
-		if e != nil {
-			return nil, e
+		ff, toolErr := mediaTool("ffmpeg")
+		if toolErr == nil {
+			p, encoderErr := chooseEncoder(ctx, ff)
+			if encoderErr == nil {
+				workers = chooseBatchWorkers(ctx, ff, p, g, vs[0])
+			}
 		}
-		p, e := chooseEncoder(ctx, ff)
-		if e != nil {
-			return nil, e
-		}
-		workers = chooseBatchWorkers(ctx, ff, p, g, vs[0])
+		// Let Export handle processing failures and optional raw fallback.
 	}
 	if o.batchTestWorkers > 0 {
 		workers = o.batchTestWorkers
@@ -75,10 +75,13 @@ func ExportBatch(ctx context.Context, s source.Source, vs []Session, o Options, 
 				dst, e := Export(ctx, s, vs[i], opts)
 				mu.Lock()
 				if e != nil {
-					if first == nil {
-						first = e
+					first = errors.Join(first, e)
+					var raw *RawFallbackError
+					if errors.As(e, &raw) {
+						results[i] = dst
+					} else {
+						cancel()
 					}
-					cancel()
 				} else {
 					results[i] = dst
 					if complete != nil {
