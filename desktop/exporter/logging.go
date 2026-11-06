@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"github.com/egoist/mygo"
 	"io"
 	"log"
 	"openaria-exporter/internal/diagnostics"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 )
 
 var userLog *diagnostics.Writer
@@ -43,7 +45,15 @@ func setupLogging() {
 	}
 	log.SetOutput(logSinks{stderr: os.Stderr, file: userLog})
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-	log.Print("stage=start")
+	revision := "unknown"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				revision = setting.Value
+			}
+		}
+	}
+	log.Printf("stage=start version=%s revision=%s platform=%s/%s", mygo.App.Version(), revision, runtime.GOOS, runtime.GOARCH)
 }
 func logLocation() string {
 	if userLog == nil {

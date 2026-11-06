@@ -34,7 +34,7 @@ func MediaBytes(v Session) int64 {
 	}
 	return n
 }
-func finishVideo(ctx context.Context, st *os.Root, v Session, manifestSHA string) error {
+func finishVideo(ctx context.Context, st *os.Root, v Session, manifestSHA string, repaired bool) error {
 	if e := st.Rename("playback.mp4", "video.mp4"); e != nil {
 		return e
 	}
@@ -57,7 +57,7 @@ func finishVideo(ctx context.Context, st *os.Root, v Session, manifestSHA string
 	if e = ctx.Err(); e != nil {
 		return e
 	}
-	b, e := json.MarshalIndent(map[string]any{"session_id": v.ID, "display_name": v.Name, "source_manifest_sha256": manifestSHA, "file": "video.mp4", "bytes": info.Size(), "media_hash_verified": false, "format": "H.264 SBS MP4", "source_copies_retained": false}, "", "  ")
+	b, e := json.MarshalIndent(map[string]any{"session_id": v.ID, "display_name": v.Name, "source_manifest_sha256": manifestSHA, "file": "video.mp4", "bytes": info.Size(), "media_hash_verified": false, "format": "H.264 SBS MP4", "source_copies_retained": false, "timeline_repaired": repaired, "timing_note": "保留捕获时间间隔；仅在受限预检通过后修正重复/轻微倒退时间戳；非 SDK 同步认证"}, "", "  ")
 	if e != nil {
 		return e
 	}

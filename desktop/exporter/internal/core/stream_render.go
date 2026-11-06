@@ -21,6 +21,8 @@ type headerInfo struct {
 		Codec         string `json:"codec_name"`
 		Width, Height int
 		Duration      string `json:"duration"`
+		TimeBase      string `json:"time_base"`
+		FrameRate     string `json:"avg_frame_rate"`
 	} `json:"streams"`
 	Format struct {
 		Duration string `json:"duration"`
@@ -45,11 +47,13 @@ func quickProbe(ctx context.Context, p string) (headerInfo, error) {
 	if e != nil {
 		return info, e
 	}
-	cmd := process.CommandContext(ctx, ff, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,duration:format=duration", "-of", "json", p)
+	cmd := process.CommandContext(ctx, ff, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,duration,time_base,avg_frame_rate:format=duration", "-of", "json", p)
 	cmd.Env = mediaEnvironment()
+	errout := &tail{}
+	cmd.Stderr = errout
 	b, e := cmd.Output()
 	if e != nil {
-		return info, fmt.Errorf("读取媒体头：%w", e)
+		return info, fmt.Errorf("读取媒体头：%w：%s", e, errout.b)
 	}
 	e = json.Unmarshal(b, &info)
 	return info, e
@@ -114,6 +118,7 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		return e
 	}
 	timing.inputProbe += time.Since(start)
+	log.Printf("media headers session=%s segments=%d left=%+v right=%+v", v.ID, len(video), left, right)
 	width, height, codec := videoShape(left)
 	rw, rh, _ := videoShape(right)
 	if width <= 0 || height <= 0 || width != rw || height != rh {
@@ -153,20 +158,47 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		profile  encoderProfile
 		decode   bool
 		gpuStack bool
+		repair   bool
 	}
 	var attempts []attempt
-	if decodeHardware && profile.stack != "" {
-		attempts = append(attempts, attempt{profile, true, true})
+	if decodeHardware && profile.stack != "" && !g.stackFailed(stackFailureKey(profile, codec, width, height)) {
+		attempts = append(attempts, attempt{profile: profile, decode: true, gpuStack: true})
 	}
-	attempts = append(attempts, attempt{profile, decodeHardware, false})
+	attempts = append(attempts, attempt{profile: profile, decode: decodeHardware})
 	if decodeHardware {
-		attempts = append(attempts, attempt{profile, false, false})
+		attempts = append(attempts, attempt{profile: profile})
 	}
 	if profile.name != "libx264" {
-		attempts = append(attempts, attempt{softwareEncoder(), false, false})
+		attempts = append(attempts, attempt{profile: softwareEncoder()})
 	}
+	attempts = append(attempts, attempt{profile: softwareEncoder(), repair: true})
 	tmp := filepath.Join(work, "playback.mp4")
+	needsRepair := false
+	var audited [2]timelineAudit
+	repaired := false
 	for i, a := range attempts {
+		if needsRepair && !a.repair {
+			continue
+		}
+		if a.repair && !needsRepair {
+			break
+		}
+		if a.repair {
+			for eye := 0; eye < 2; eye++ {
+				audit, err := auditTimeline(ctx, inputs[eye])
+				if err != nil {
+					return fmt.Errorf("时间轴安全预检失败（眼 %d）：%w；原编码错误：%v", eye, err, e)
+				}
+				if audit.width != width || audit.height != height {
+					return fmt.Errorf("时间轴预检左右眼尺寸不一致")
+				}
+				audited[eye] = audit
+				log.Printf("timeline audit session=%s eye=%d frames=%d duration=%.6f correction=%.9f", v.ID, eye, audit.frames, audit.previous-audit.first, audit.correction)
+			}
+			if math.Abs((audited[0].adjusted-audited[0].first)-(audited[1].adjusted-audited[1].first)) > .15 {
+				return fmt.Errorf("左右眼时长差超过 150ms，拒绝静默截断")
+			}
+		}
 		if e = ctx.Err(); e != nil {
 			return e
 		}
@@ -177,6 +209,10 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		if a.gpuStack {
 			filter = strings.Replace(filter, "hstack=", ""+a.profile.stack+"=", 1)
 		}
+		if a.repair {
+			filter = strings.ReplaceAll(filter, "setpts=PTS-STARTPTS", "setpts=PTS-STARTPTS,"+timelineFilter)
+			filter = strings.TrimSuffix(filter, "[v]") + "," + timelineFilter + "[v]"
+		}
 		mapped := "[v]"
 		if a.profile.upload && !a.gpuStack {
 			filter += ";[v]format=nv12,hwupload[hw]"
@@ -184,6 +220,9 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		}
 		if len(audio) > 0 {
 			offset := audio[0].Start - video[0].Start
+			if math.IsNaN(offset) || math.IsInf(offset, 0) || math.Abs(offset) > duration {
+				return fmt.Errorf("音视频起点偏移超出录像时长，拒绝生成误同步成品")
+			}
 			if offset >= 0 {
 				filter += fmt.Sprintf(";[2:a]asetpts=PTS-STARTPTS,adelay=%d:all=1,apad[a]", int64(math.Round(offset*1000)))
 			} else {
@@ -206,12 +245,15 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 			args = append(args, "-map", "[a]", "-c:a", "aac", "-shortest", "-shortest_buf_duration", "0.1")
 		}
 		args = append(args, a.profile.args(mediaBitrate(v))...)
+		if a.repair {
+			args = append(args, "-bf", "0", "-video_track_timescale", "1000000")
+		}
 		if !a.profile.upload && !a.gpuStack {
 			args = append(args, "-pix_fmt", "nv12")
 		}
 		// Local playback does not need faststart's final full-file relocation pass.
 		args = append(args, tmp)
-		log.Printf("stream encode session=%s encoder=%s hardware_decode=%v hardware_stack=%v attempt=%d", v.ID, a.profile.name, a.decode, a.gpuStack, i+1)
+		log.Printf("stream encode session=%s encoder=%s hardware_decode=%v hardware_stack=%v timeline_repair=%v attempt=%d", v.ID, a.profile.name, a.decode, a.gpuStack, a.repair, i+1)
 		if progress != nil {
 			progress(Progress{Stage: "边读边编码", File: "准备媒体"})
 		}
@@ -219,9 +261,20 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		e = runMedia(ctx, ff, args, progress)
 		timing.encode += time.Since(start)
 		if e == nil {
+			repaired = a.repair
 			break
 		}
 		log.Printf("stream encode fallback session=%s reason=%v", v.ID, e)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := g.Err(); err != nil {
+			return err
+		}
+		if a.gpuStack {
+			g.recordStackFailure(stackFailureKey(a.profile, codec, width, height), e)
+		}
+		needsRepair = needsRepair || timestampFailure(e)
 	}
 	if e != nil {
 		return e
@@ -242,6 +295,17 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 	actual, e := strconv.ParseFloat(info.Format.Duration, 64)
 	if e != nil || math.IsNaN(actual) || math.IsInf(actual, 0) || actual <= 0 {
 		return fmt.Errorf("输出时长无效：%s", info.Format.Duration)
+	}
+	if repaired {
+		expected := math.Min(audited[0].adjusted-audited[0].first, audited[1].adjusted-audited[1].first)
+		if actual < expected-.05 || actual > expected+1 {
+			return fmt.Errorf("修复后视频时长异常：实际 %.6f，预检 %.6f", actual, expected)
+		}
+		if err := verifyRepairedPackets(ctx, tmp); err != nil {
+			return err
+		}
+		timing.timelineRepaired = true
+		log.Printf("timeline recovery verified session=%s duration=%.6f", v.ID, actual)
 	}
 	// The muxer stops at the decoded video's end. Capture clock timestamps in
 	// the manifest can differ from actual media duration; never pad to those.

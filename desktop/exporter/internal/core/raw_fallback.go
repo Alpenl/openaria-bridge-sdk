@@ -36,8 +36,10 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (string,
 	raw.VideoOnly, raw.Playback, raw.RawFallback, raw.rawOnly = false, false, false, true
 	dst, copyErr := exportOnce(ctx, s, v, raw)
 	if copyErr != nil {
+		log.Printf("raw fallback failed session=%s reason=%v", v.ID, copyErr)
 		return "", fmt.Errorf("视频处理失败：%v；原始文件兜底导出也未完成：%w", err, copyErr)
 	}
+	log.Printf("raw fallback published session=%s path=%q bytes=%d", v.ID, dst, MediaBytes(v))
 	return dst, &RawFallbackError{Path: dst, Cause: err}
 }
 
@@ -51,6 +53,24 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 		}
 		defer g.Close()
 	}
+	// Reject stale partials before writing anything. Never clean up a file from
+	// a previous run merely because a new copy hit O_EXCL or was canceled.
+	for _, a := range files {
+		if _, err := data.Lstat(a.Path); err == nil {
+			return fmt.Errorf("原始暂存文件已存在，保留不覆盖：%s", a.Path)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	var created []string
+	complete := false
+	defer func() {
+		if !complete {
+			for _, p := range created {
+				_ = data.Remove(p)
+			}
+		}
+	}()
 	var total int64
 	buf := make([]byte, 1<<20)
 	for _, a := range files {
@@ -67,6 +87,7 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 		if err != nil {
 			return err
 		}
+		created = append(created, a.Path)
 		id, ok := g.index[path.Join(v.Dir, a.Path)]
 		if !ok {
 			f.Close()
@@ -92,5 +113,9 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 			return err
 		}
 	}
-	return g.Err()
+	if err := g.Err(); err != nil {
+		return err
+	}
+	complete = true
+	return nil
 }

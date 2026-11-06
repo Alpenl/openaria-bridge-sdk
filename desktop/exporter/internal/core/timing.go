@@ -10,6 +10,7 @@ import (
 type sessionTimings struct {
 	session                                             string
 	serial                                              bool
+	timelineRepaired                                    bool
 	start                                               time.Time
 	copy, sync, verify, inputProbe, encode, outputProbe time.Duration
 }
