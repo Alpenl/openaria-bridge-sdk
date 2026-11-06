@@ -47,6 +47,9 @@ type Manifest struct {
 	Audio struct {
 		Segments []Segment `json:"segments"`
 	} `json:"audio"`
+	IMU struct {
+		Artifact Artifact `json:"artifact"`
+	} `json:"imu"`
 }
 type Session struct {
 	Dir, ID, Name, Status string
@@ -352,6 +355,18 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 	}
 	defer data.Close()
 	if o.VideoOnly {
+		entries, err := data.Open(".")
+		if err != nil {
+			return "", err
+		}
+		items, err := entries.ReadDir(-1)
+		closeErr := entries.Close()
+		if err != nil || closeErr != nil {
+			return "", errors.Join(err, closeErr)
+		}
+		if len(items) != 0 {
+			return "", fmt.Errorf("原始暂存目录已有文件，保留不覆盖；请检查 %s", filepath.Join(o.Output, stage, "source"))
+		}
 		for _, p := range []string{"export.json", "video.mp4", "playback.mp4"} {
 			if e := st.Remove(p); e != nil && !os.IsNotExist(e) {
 				return "", e
@@ -361,7 +376,9 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 			// Remove only our media staging while the session lock is still held,
 			// including failures/cancellation; never remove anything on the source.
 			data.Close()
-			exportErr = errors.Join(exportErr, st.RemoveAll("source"), st.RemoveAll("work"))
+			if exportErr != nil {
+				exportErr = errors.Join(exportErr, st.RemoveAll("source"), st.RemoveAll("work"))
+			}
 		}()
 	}
 	// A batch stream may already be prefetching another session. Serialize
@@ -380,16 +397,6 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 	for _, a := range v.Artifacts {
 		expect[a.Path] = a
 	}
-	if o.VideoOnly || o.rawOnly {
-		expect = mediaArtifacts(v)
-		selected := make([]Artifact, 0, len(expect))
-		for _, a := range files {
-			if _, ok := expect[a.Path]; ok {
-				selected = append(selected, a)
-			}
-		}
-		files = selected
-	}
 	found := map[string]bool{}
 	var required uint64
 	for i, a := range files {
@@ -402,6 +409,9 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 			receipt.Provenance[a.Path] = "manifest"
 		} else {
 			receipt.Provenance[a.Path] = "无 manifest 期望；源读取哈希"
+			if o.VideoOnly || o.rawOnly {
+				receipt.Provenance[a.Path] = "录制目录附加文件；仅核对字节数"
+			}
 		}
 		if _, e := data.Lstat(a.Path); os.IsNotExist(e) {
 			required += uint64(a.Bytes)
@@ -413,7 +423,7 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 		}
 	}
 	if o.VideoOnly {
-		required = uint64(float64(mediaBitrate(v)+256000) / 8 * mediaDuration(v) * 1.1)
+		required += uint64(float64(mediaBitrate(v)+256000) / 8 * mediaDuration(v) * 1.1)
 	} else if o.Playback {
 		required += uint64(v.Bytes) * 2
 	}
@@ -476,6 +486,7 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 			}
 			defer g.Close()
 		}
+		o.stream = g // The following full-data copy shares this source read lock too.
 		if e = renderStreaming(ctx, filepath.Join(o.Output, stage), v, g, o.Progress, timings); e != nil {
 			if ctx.Err() != nil {
 				return "", ctx.Err()
@@ -504,13 +515,16 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 		receipt.Timing = "按 manifest index 依次拼接，段内解码时间戳；不等同 SDK 单调时钟时间线重建；音画同步未认证"
 	}
 	if o.VideoOnly {
-		if e = finishVideo(ctx, st, v, receipt.ManifestSHA, timings.timelineRepaired); e != nil {
+		if e = copyRawMedia(ctx, s, v, o, data, files); e != nil {
+			return "", e
+		}
+		if e = writeNew(data, "manifest.json", v.Raw); e != nil {
+			return "", e
+		}
+		if e = finishVideo(ctx, st, v, receipt.ManifestSHA, timings.timelineRepaired, files); e != nil {
 			return "", e
 		}
 		data.Close()
-		if e = st.RemoveAll("source"); e != nil {
-			return "", e
-		}
 		if e = st.RemoveAll("work"); e != nil {
 			return "", e
 		}
@@ -520,7 +534,7 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 			return "", e
 		}
 		if o.rawOnly {
-			const note = "视频处理未完成。source 文件夹保存的是卡内原始左右眼视频、音频分段和 manifest.json，未拼接、未转码，也未重建音画同步。\n这不是合并成品；应用未将其标记为合并导出成功。卡内数据未修改。\n"
+			const note = "视频处理未完成。source 文件夹保留录制目录内全部文件，包括原始左右眼视频、独立音频、IMU、帧时间戳及 manifest.json（以实际录制为准）。未拼接、未转码，不转换 IMU，也未重建音画同步。\n这不是合并成品；应用未将其标记为合并导出成功。卡内数据未修改。\n"
 			if e = targetSafe(st, "UNPROCESSED.txt"); e != nil {
 				return "", e
 			}
@@ -637,6 +651,9 @@ func inventory(ctx context.Context, s source.Source, base string) ([]Artifact, e
 		}
 		sort.Slice(ds, func(i, j int) bool { return ds[i].Name < ds[j].Name })
 		for _, d := range ds {
+			if source.Safe(d.Name) != nil || strings.Contains(d.Name, "/") || d.Name == "." || d.Size < 0 {
+				return fmt.Errorf("无效源目录项 %q", d.Name)
+			}
 			q := path.Join(p, d.Name)
 			if e = source.Safe(q); e != nil {
 				return e

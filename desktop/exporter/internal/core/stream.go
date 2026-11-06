@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"openaria-exporter/internal/source"
@@ -114,7 +115,7 @@ func newMediaStream(ctx context.Context, s source.Source, vs []Session) (*mediaS
 		}
 		f := g.files[id]
 		w.Header().Set("Content-Type", "application/octet-stream")
-		http.ServeContent(w, r, "media", time.Time{}, io.NewSectionReader(streamReader{g, id}, 0, f.size))
+		http.ServeContent(streamResponse{w}, r, "media", time.Time{}, io.NewSectionReader(streamReader{g, id}, 0, f.size))
 	})}
 	go func() { _ = g.server.Serve(l) }()
 	go func() {
@@ -192,6 +193,19 @@ func (g *mediaStream) block(key streamKey) ([]byte, error) {
 	g.cache[key] = g.lru.PushFront(streamBlockData{key, data})
 	g.bytes += len(data)
 	return data, nil
+}
+
+// Use bounded ordinary Write calls rather than the optional net/http ReaderFrom
+// fast path. This also surfaces response-write failures otherwise discarded by
+// ServeContent; never log tokenized URLs or media contents.
+type streamResponse struct{ http.ResponseWriter }
+
+func (w streamResponse) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	if err != nil {
+		log.Printf("media HTTP write: bytes=%d/%d err=%v", n, len(b), err)
+	}
+	return n, err
 }
 
 type streamReader struct {

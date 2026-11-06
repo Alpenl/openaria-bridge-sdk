@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,10 +47,14 @@ func DefaultPath() (string, error) {
 // Revision depends on media descriptors, not names, drive letters or catalog labels.
 // It hashes only small manifest data, never source media.
 func Revision(v core.Session) string {
+	artifacts := append([]core.Artifact(nil), v.Artifacts...)
+	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 	b, _ := json.Marshal(struct {
-		Video any
-		Audio any
-	}{v.Manifest.Video, v.Manifest.Audio})
+		Format    string
+		Video     any
+		Audio     any
+		Artifacts []core.Artifact
+	}{"complete-recording-v1", v.Manifest.Video, v.Manifest.Audio, artifacts})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
