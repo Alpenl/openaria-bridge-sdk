@@ -425,6 +425,19 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 		return "", fmt.Errorf("目标空间不足：需要 %d，可用 %d", required+(16<<20), free)
 	}
 	if o.rawOnly {
+		// Do not remove a previous partial's originals on conflict or cancellation.
+		dir, err := data.Open(".")
+		if err != nil {
+			return "", err
+		}
+		entries, err := dir.ReadDir(-1)
+		closeErr := dir.Close()
+		if err != nil || closeErr != nil {
+			return "", errors.Join(err, closeErr)
+		}
+		if len(entries) != 0 {
+			return "", fmt.Errorf("原始暂存目录已有文件，保留不覆盖；请检查 %s", filepath.Join(o.Output, stage, "source"))
+		}
 		// Raw fallback is a new, independently locked output, never a video success.
 		defer func() {
 			data.Close()
@@ -491,7 +504,7 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 		receipt.Timing = "按 manifest index 依次拼接，段内解码时间戳；不等同 SDK 单调时钟时间线重建；音画同步未认证"
 	}
 	if o.VideoOnly {
-		if e = finishVideo(ctx, st, v, receipt.ManifestSHA); e != nil {
+		if e = finishVideo(ctx, st, v, receipt.ManifestSHA, timings.timelineRepaired); e != nil {
 			return "", e
 		}
 		data.Close()

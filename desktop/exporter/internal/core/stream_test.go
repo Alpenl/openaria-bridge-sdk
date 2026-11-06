@@ -86,7 +86,7 @@ func TestStreamRangesAndIsolation(t *testing.T) {
 			b, e := io.ReadAll(r.Body)
 			r.Body.Close()
 			if e != nil || !bytes.Equal(b, data) {
-				t.Error("concurrent range stream mismatch", e)
+				t.Errorf("concurrent range stream mismatch: err=%v status=%d bytes=%d want=%d source=%v", e, r.StatusCode, len(b), len(data), g.Err())
 			}
 		}()
 	}

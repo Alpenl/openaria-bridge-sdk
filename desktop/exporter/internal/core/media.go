@@ -77,7 +77,7 @@ func ordered(ss []Segment) ([]Segment, error) {
 	v := append([]Segment(nil), ss...)
 	sort.Slice(v, func(i, j int) bool { return v[i].Index < v[j].Index })
 	for i, s := range v {
-		if s.End <= s.Start || math.IsNaN(s.Start) || math.IsInf(s.End, 0) {
+		if s.Index < 0 || s.End <= s.Start || math.IsNaN(s.Start) || math.IsNaN(s.End) || math.IsInf(s.Start, 0) || math.IsInf(s.End, 0) {
 			return nil, fmt.Errorf("无效媒体时间")
 		}
 		if i > 0 && (s.Index != v[i-1].Index+1 || math.Abs(s.Start-v[i-1].End) > 0.001) {

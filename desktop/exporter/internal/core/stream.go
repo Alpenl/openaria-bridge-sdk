@@ -37,21 +37,22 @@ type streamFile struct {
 // One cache and one read lock coordinate all eyes, audio and sessions. Only
 // compressed bytes are cached; decoded frames belong to FFmpeg's bounded queues.
 type mediaStream struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	source    source.Source
-	mu        sync.Mutex
-	files     []streamFile
-	index     map[string]int
-	cache     map[streamKey]*list.Element
-	lru       *list.List
-	bytes     int
-	err       error
-	readBytes int64
-	prefetch  chan streamKey
-	done      chan struct{}
-	server    *http.Server
-	base      string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	source       source.Source
+	mu           sync.Mutex
+	files        []streamFile
+	index        map[string]int
+	cache        map[streamKey]*list.Element
+	lru          *list.List
+	bytes        int
+	err          error
+	readBytes    int64
+	failedStacks map[string]bool
+	prefetch     chan streamKey
+	done         chan struct{}
+	server       *http.Server
+	base         string
 }
 
 func newMediaStream(ctx context.Context, s source.Source, vs []Session) (*mediaStream, error) {

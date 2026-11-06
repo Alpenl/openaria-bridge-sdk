@@ -35,7 +35,15 @@ func (a *app) exportDiagnostics() {
 			var src *os.File
 			src, err = os.Open(userLogPath)
 			if err == nil {
-				_, err = io.Copy(out, io.LimitReader(src, 2<<20))
+				// Keep the latest failure, not the first 2 MiB of old detection logs.
+				info, statErr := src.Stat()
+				err = statErr
+				if err == nil {
+					_, err = src.Seek(max(0, info.Size()-(2<<20)), io.SeekStart)
+				}
+				if err == nil {
+					_, err = io.Copy(out, io.LimitReader(src, 2<<20))
+				}
 				src.Close()
 			}
 		}
