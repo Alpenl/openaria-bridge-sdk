@@ -2,6 +2,10 @@
 
 工作流：仓库根目录 `.github/workflows/exporter.yml`。桌面客户端有独立 Go module 和版本，不改动根目录 Python SDK 的构建和 `v*` 发布流程。
 
+## 当前发布范围
+
+`release-platforms.json` 为当前版本需要测试、打包及发布的平台白名单。0.1.6 是 Windows 专用修复，值为 `["windows-amd64"]`，不会触发 Mac/Linux 桌面打包；以下三平台说明描述工作流支持的能力，实际只执行白名单目标。未来全平台版本需显式恢复全部三个目标。Release 汇总使用同一白名单，任何目标缺失或失败均不发布草稿。
+
 ## 触发与检查
 
 - main 的相关文件 push，以及涉及客户端的 pull request：执行三系统原生测试和完整安装包构建。开发分支通过 PR 验证，避免同一提交在 push 和 PR 两处重复构建。

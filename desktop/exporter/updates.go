@@ -31,6 +31,7 @@ func (a *app) setupUpdates() {
 				a.notice(fmt.Sprintf("Open Aria Exporter %s", mygo.App.Version()), "只读扫描与录像导出。更新仅由手动检查和安装触发。")
 			}},
 			{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) { a.checkUpdates() }},
+			{Label: "导出诊断信息…", Click: func(*mygo.MenuItem, *mygo.Window) { a.exportDiagnostics() }},
 			{Label: "打开日志文件…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openLogs() }},
 		}, append(a.deviceAccessMenu(), mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit})...)}, {Role: mygo.RoleEditMenu}, {Role: mygo.RoleWindowMenu},
 	}))

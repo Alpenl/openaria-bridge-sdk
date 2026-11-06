@@ -3,11 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"golang.org/x/sys/windows"
 	"io"
-	"openaria-exporter/internal/process"
 	"openaria-exporter/internal/source"
 	"os"
-	"os/exec"
 	"syscall"
 	"time"
 )
@@ -15,14 +14,8 @@ import (
 func winParts() ([]winPartition, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	b, e := process.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; @(Get-Disk | Where-Object {$_.BusType -in @('USB','SD','MMC')} | ForEach-Object { $d=$_; Get-Partition -DiskNumber $d.Number | ForEach-Object { @{Disk=$d.Number;Partition=$_.PartitionNumber;Offset=$_.Offset;Size=$_.Size;Name=$d.FriendlyName} } }) | ConvertTo-Json -Compress`).Output()
-	if e != nil {
-		if x, ok := e.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("enumerate: %w: %s", e, x.Stderr)
-		}
-		return nil, e
-	}
-	return parseWinPartitions(b)
+	_, parts, err := nativeWinInventory(ctx)
+	return parts, err
 }
 func winPath(p winPartition) string { return fmt.Sprintf("usb-disk:%d:%d", p.Disk, p.Partition) }
 func devices() ([]Device, error) {
@@ -50,6 +43,10 @@ func openWin(p winPartition) (*os.File, error) {
 	h, e := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
 	if e != nil {
 		return nil, e
+	}
+	if err := validateNativeHandle(windows.Handle(h), p); err != nil {
+		syscall.CloseHandle(h)
+		return nil, fmt.Errorf("核对只读磁盘句柄：%w", err)
 	}
 	return os.NewFile(uintptr(h), "readonly USB"), nil
 }
