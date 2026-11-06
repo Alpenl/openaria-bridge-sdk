@@ -44,14 +44,18 @@ func Export(ctx context.Context, s source.Source, v Session, o Options) (string,
 }
 
 func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, data *os.Root, files []Artifact) error {
-	g := o.stream
-	if g == nil {
-		var err error
-		g, err = newMediaStream(ctx, s, []Session{v})
-		if err != nil {
-			return err
+	stage := "保存完整录制数据"
+	if o.rawOnly {
+		stage = "处理失败，保存原始文件"
+	}
+	// Share the batch's physical-source lock, including Open/Read/Close, without
+	// adding mutable entries to its HTTP media index or hashing large recordings.
+	withSource := func(fn func() error) error {
+		if o.stream != nil {
+			o.stream.mu.Lock()
+			defer o.stream.mu.Unlock()
 		}
-		defer g.Close()
+		return fn()
 	}
 	// Reject stale partials before writing anything. Never clean up a file from
 	// a previous run merely because a new copy hit O_EXCL or was canceled.
@@ -72,6 +76,9 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 		}
 	}()
 	var total int64
+	if o.VideoOnly {
+		total = MediaBytes(v)
+	}
 	buf := make([]byte, 1<<20)
 	for _, a := range files {
 		if err := ctx.Err(); err != nil {
@@ -88,23 +95,33 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 			return err
 		}
 		created = append(created, a.Path)
-		id, ok := g.index[path.Join(v.Dir, a.Path)]
-		if !ok {
+		var src io.ReadCloser
+		err = withSource(func() (e error) { src, e = s.Open(path.Join(v.Dir, a.Path)); return e })
+		if err != nil {
 			f.Close()
-			return fmt.Errorf("媒体未列入只读清单：%s", a.Path)
+			return err
 		}
 		if o.Progress != nil {
-			o.Progress(Progress{Bytes: total, File: a.Path, Stage: "处理失败，保存原始文件"})
+			o.Progress(Progress{Bytes: total, File: a.Path, Stage: stage})
 		}
-		n, err := copyContext(ctx, f, io.NewSectionReader(streamReader{g, id}, 0, a.Bytes), buf, func(n int) {
+		reader := sourceLockedReader{src, withSource}
+		n, err := copyContext(ctx, f, io.LimitReader(reader, a.Bytes), buf, func(n int) {
 			total += int64(n)
 			if o.Progress != nil {
-				o.Progress(Progress{Bytes: total, File: a.Path, Stage: "处理失败，保存原始文件"})
+				o.Progress(Progress{Bytes: total, File: a.Path, Stage: stage})
 			}
 		})
 		if err == nil && n != a.Bytes {
 			err = io.ErrUnexpectedEOF
 		}
+		if err == nil {
+			var extra [1]byte
+			n, end := reader.Read(extra[:])
+			if n != 0 || end != io.EOF {
+				err = fmt.Errorf("源文件大小改变或读取未结束 %s: %v", a.Path, end)
+			}
+		}
+		err = errors.Join(err, withSource(src.Close))
 		if err == nil {
 			err = f.Sync()
 		}
@@ -113,9 +130,32 @@ func copyRawMedia(ctx context.Context, s source.Source, v Session, o Options, da
 			return err
 		}
 	}
-	if err := g.Err(); err != nil {
+	// Refuse to publish a snapshot whose file membership changed during copying.
+	var after []Artifact
+	if err := withSource(func() (e error) { after, e = inventory(ctx, s, v.Dir); return e }); err != nil {
+		return err
+	}
+	if len(after) != len(files) {
+		return fmt.Errorf("复制期间录制目录内容改变")
+	}
+	for i, a := range after {
+		if a.Path != files[i].Path || a.Bytes != files[i].Bytes {
+			return fmt.Errorf("复制期间录制目录内容改变：%s", a.Path)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	complete = true
 	return nil
+}
+
+type sourceLockedReader struct {
+	r          io.Reader
+	withSource func(func() error) error
+}
+
+func (r sourceLockedReader) Read(p []byte) (n int, err error) {
+	err = r.withSource(func() error { n, err = r.r.Read(p); return err })
+	return
 }

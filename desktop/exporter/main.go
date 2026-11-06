@@ -104,14 +104,14 @@ func (a *app) run(export bool) {
 
 			if !export {
 				items, e = scanCard(ctx, s)
-				msg = fmt.Sprintf("发现 %d 条录像。导出将合并分段并生成 MP4。", len(items)) + source.Warnings(s)
+				msg = fmt.Sprintf("发现 %d 条录像。导出将生成 MP4 并保留全部原始视频、IMU、音频等录制数据。", len(items)) + source.Warnings(s)
 				if e == nil {
 					historyErr = loadLocalMarks(items)
 				}
 			} else {
 				var batchTotal, completedBytes int64
 				for _, v := range selected {
-					batchTotal += core.MediaBytes(v)
+					batchTotal += core.ExportBytes(v)
 				}
 				completed := 0
 				_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: out, VideoOnly: true, RawFallback: true}, func(index int, p core.Progress) {
@@ -133,7 +133,7 @@ func (a *app) run(export bool) {
 						})
 					}
 					completed++
-					completedBytes += core.MediaBytes(selected[index])
+					completedBytes += core.ExportBytes(selected[index])
 					msg = fmt.Sprintf("已完成 %d/%d 条 · %.1f/%.1f MiB · %s", completed, len(selected), float64(completedBytes)/(1<<20), float64(batchTotal)/(1<<20), dst)
 				})
 			}

@@ -46,7 +46,7 @@ func prepareLocalAction(s history.Store, kind string, selected []core.Session) (
 	}
 	if kind == "outputs" {
 		p.title = "删除本机导出的成品"
-		p.message = "永久删除以下路径中的成品。本机已导出标记和卡内原始录像保留。"
+		p.message = "永久删除以下路径中的合成视频及 source 内本机原始副本（视频、IMU、音频等）。本机已导出标记和卡内原始录像保留。"
 		var err error
 		p.outputs, err = s.Outputs(selected)
 		if err != nil {

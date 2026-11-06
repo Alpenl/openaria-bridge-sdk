@@ -127,7 +127,7 @@ func (a *app) sidebar(c *ui.Context) {
 					})
 				})
 				ui.Text(c, "自动保存到所选位置下的 OpenAriaExporter 文件夹").FontSize(11).TextColor(t.TextMuted)
-				ui.Text(c, "正常生成左右拼接 MP4；处理失败时保存原始分段并弹窗提示").FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "导出 MP4 及全部原始视频、IMU、音频；处理失败仍保存原始数据并提示").FontSize(11).TextColor(t.TextMuted)
 			})
 		})
 	})

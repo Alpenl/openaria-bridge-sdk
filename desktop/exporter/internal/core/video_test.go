@@ -16,7 +16,7 @@ func TestVideoOnlyOutputAndCleanup(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, n := range []string{"source", "work", "manifest.json", "receipt.json", "playback.mp4"} {
+	for _, n := range []string{"work", "manifest.json", "receipt.json", "playback.mp4"} {
 		if _, e = os.Stat(filepath.Join(p, n)); !os.IsNotExist(e) {
 			t.Fatalf("retained %s", n)
 		}
@@ -34,7 +34,7 @@ func TestVideoOnlyOutputAndCleanup(t *testing.T) {
 	if e = json.Unmarshal(b, &record); e != nil {
 		t.Fatal(e)
 	}
-	if record["sha256"] != nil || record["media_hash_verified"] != false || record["bytes"] != float64(size) || record["source_copies_retained"] != false {
+	if record["sha256"] != nil || record["media_hash_verified"] != false || record["bytes"] != float64(size) || record["source_copies_retained"] != true {
 		t.Fatal(record)
 	}
 	info, e := probe(t.Context(), filepath.Join(p, "video.mp4"))
