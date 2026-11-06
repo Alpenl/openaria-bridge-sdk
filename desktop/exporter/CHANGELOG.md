@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6
+
+- Windows 修复版：使用 QueryDosDevice 和只读 DeviceIoControl 枚举 USB/SD/MMC 物理磁盘与分区，读卡检测不再依赖 PowerShell、Get-Disk 或 Get-Partition。
+- 打开读取句柄后再次核实外置总线及分区偏移/长度，避免设备编号重用时误读内置盘；继续校验 OpenAria 卷协议。
+- 记录 Windows 版本、管理员状态、原生接口失败阶段及系统错误；新增“导出诊断信息”菜单，不自动上传、不包含录像内容。
+- 增加原生磁盘布局 ABI、MBR/GPT、边界溢出、总线白名单及 PowerShell 不可用回归。
+- 本次只构建、发布 Windows amd64 安装包；Mac/Ubuntu 继续使用 0.1.5。构建目标由 release-platforms.json 显式指定。
+
 ## 0.1.5
 
 - 桌面客户端集成至 SDK 仓库的 desktop/exporter，独立版本与 exporter-v* 发布标签。

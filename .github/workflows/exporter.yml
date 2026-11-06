@@ -21,24 +21,36 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      platforms: ${{ steps.targets.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: targets
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          platforms=json.loads(pathlib.Path('desktop/exporter/release-platforms.json').read_text())
+          configs={
+            'windows-amd64': dict(os='windows-2025',target='windows/amd64',media_flag='--windows-media-dir'),
+            'darwin-arm64': dict(os='macos-15',target='darwin/arm64',media_flag='--macos-media-dir'),
+            'linux-amd64': dict(os='ubuntu-22.04',target='linux/amd64',media_flag='--linux-media-dir'),
+          }
+          assert platforms and len(platforms)==len(set(platforms)) and all(p in configs for p in platforms)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              f.write('matrix='+json.dumps({'include':[dict(platform=p,**configs[p]) for p in platforms]})+'\n')
+              f.write('platforms='+json.dumps(platforms)+'\n')
+          PY
   build:
+    needs: targets
     name: Test and package / ${{ matrix.platform }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            platform: darwin-arm64
-            target: darwin/arm64
-            media_flag: --macos-media-dir
-          - os: windows-2025
-            platform: windows-amd64
-            target: windows/amd64
-            media_flag: --windows-media-dir
-          - os: ubuntu-22.04
-            platform: linux-amd64
-            target: linux/amd64
-            media_flag: --linux-media-dir
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -118,7 +130,7 @@ jobs:
   release:
     name: Prepare desktop release draft
     if: startsWith(github.ref, 'refs/tags/exporter-v')
-    needs: build
+    needs: [targets, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -133,12 +145,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_PLATFORMS: ${{ needs.targets.outputs.platforms }}
         run: |
           python3 - <<'PY'
-          import hashlib, os, pathlib, shutil, subprocess
+          import hashlib, json, os, pathlib, shutil, subprocess
           root=pathlib.Path('packages'); output=pathlib.Path('release'); output.mkdir()
           sums=[]
-          for platform in ('darwin-arm64','windows-amd64','linux-amd64'):
+          for platform in json.loads(os.environ['RELEASE_PLATFORMS']):
               folder=root/('exporter-'+platform+'-'+os.environ['GITHUB_SHA'])
               for line in (folder/'SHA256SUMS').read_text().splitlines():
                   digest,name=line.split('  ',1)
