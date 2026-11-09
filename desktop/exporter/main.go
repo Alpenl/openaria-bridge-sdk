@@ -34,6 +34,7 @@ type app struct {
 	held                            source.Source
 	localAction                     *localAction
 	exportWarning                   *exportWarning
+	exportResults                   map[string]string // Last attempt; separate from durable history.
 	// exporting 区分扫描与导出；progress 为批量导出进度，负数表示时长未知。
 	exporting, failed, succeeded bool
 	progress                     float64
@@ -89,6 +90,14 @@ func (a *app) run(export bool) {
 			selected = append(selected, v)
 		}
 	}
+	if export {
+		if a.exportResults == nil {
+			a.exportResults = map[string]string{}
+		}
+		for _, v := range selected {
+			a.exportResults[v.Dir] = "本次等待导出"
+		}
+	}
 	held := a.held
 	go func() {
 		defer cancel()
@@ -100,6 +109,8 @@ func (a *app) run(export bool) {
 		var items []core.Session
 		msg := ""
 		var historyErr error
+		var paths []string
+		completedSessions := map[string]bool{}
 		if e == nil {
 
 			if !export {
@@ -114,11 +125,17 @@ func (a *app) run(export bool) {
 					batchTotal += core.ExportBytes(v)
 				}
 				completed := 0
-				_, e = core.ExportBatch(ctx, s, selected, core.Options{Output: out, VideoOnly: true, RawFallback: true}, func(index int, p core.Progress) {
+				paths, e = core.ExportBatch(ctx, s, selected, core.Options{Output: out, VideoOnly: true, RawFallback: true}, func(index int, p core.Progress) {
 					text := progressText(p, index+1, len(selected), completedBytes, batchTotal)
-					a.update(func() { a.status = text; a.progress = -1 })
+					a.update(func() {
+						a.status = text
+						a.progress = -1
+						a.exportResults[selected[index].Dir] = "本次正在导出"
+					})
 				}, func(index int, dst string) {
 					v := selected[index]
+					completedSessions[v.Dir] = true
+					a.update(func() { a.exportResults[v.Dir] = "本次已导出" })
 					mark, markErr := saveLocalMark(v, dst)
 					if markErr != nil {
 						historyErr = errors.Join(historyErr, fmt.Errorf("%s：视频已导出，但本机标记保存失败：%w", v.Name, markErr))
@@ -142,6 +159,9 @@ func (a *app) run(export bool) {
 			a.busy = false
 			a.exporting = false
 			a.cancel = nil
+			if export {
+				a.applyExportResults(selected, paths, completedSessions)
+			}
 
 			if e != nil {
 				a.setStatus(e.Error(), true)
@@ -295,6 +315,7 @@ func (a *app) changeSource(p string) {
 	}
 	a.src = p
 	a.scanned = ""
+	a.exportResults = nil
 	a.items = nil
 	a.picked = map[string]bool{}
 }

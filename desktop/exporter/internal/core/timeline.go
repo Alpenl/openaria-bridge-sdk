@@ -128,7 +128,7 @@ func auditTimeline(ctx context.Context, list string) (timelineAudit, error) {
 	}
 	c, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := process.CommandContext(c, ff, "-v", "error", "-protocol_whitelist", "file,http,tcp", "-f", "concat", "-safe", "0", "-i", list, "-select_streams", "v:0", "-show_frames", "-show_entries", "frame=pts_time,width,height", "-of", "compact=p=1:nk=0")
+	cmd := process.CommandContext(c, ff, "-v", "error", "-threads", "1", "-protocol_whitelist", "file,http,tcp", "-f", "concat", "-safe", "0", "-i", list, "-select_streams", "v:0", "-show_frames", "-show_entries", "frame=pts_time,width,height", "-of", "compact=p=1:nk=0")
 	cmd.Env = mediaEnvironment()
 	stderr := &tail{}
 	cmd.Stderr = stderr

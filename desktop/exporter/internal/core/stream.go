@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"openaria-exporter/internal/source"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,15 +39,18 @@ type streamFile struct {
 // One cache and one read lock coordinate all eyes, audio and sessions. Only
 // compressed bytes are cached; decoded frames belong to FFmpeg's bounded queues.
 type mediaStream struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	source       source.Source
-	mu           sync.Mutex
-	files        []streamFile
-	index        map[string]int
-	cache        map[streamKey]*list.Element
-	lru          *list.List
-	bytes        int
+	ctx       context.Context
+	cancel    context.CancelFunc
+	source    source.Source
+	mu        sync.Mutex
+	files     []streamFile
+	index     map[string]int
+	cache     map[streamKey]*list.Element
+	lru       *list.List
+	bytes     int
+	lowMemory bool
+	// Low-memory retries are serialized even in a two-worker batch.
+	recoverySlot chan struct{}
 	err          error
 	readBytes    int64
 	failedStacks map[string]bool
@@ -58,7 +62,7 @@ type mediaStream struct {
 
 func newMediaStream(ctx context.Context, s source.Source, vs []Session) (*mediaStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	g := &mediaStream{ctx: ctx, cancel: cancel, source: s, index: map[string]int{}, cache: map[streamKey]*list.Element{}, lru: list.New(), prefetch: make(chan streamKey, 16), done: make(chan struct{})}
+	g := &mediaStream{ctx: ctx, cancel: cancel, source: s, index: map[string]int{}, cache: map[streamKey]*list.Element{}, lru: list.New(), prefetch: make(chan streamKey, 16), done: make(chan struct{}), recoverySlot: make(chan struct{}, 1)}
 	for _, v := range vs {
 		for _, a := range mediaArtifacts(v) {
 			p := path.Join(v.Dir, a.Path)
@@ -117,7 +121,7 @@ func newMediaStream(ctx context.Context, s source.Source, vs []Session) (*mediaS
 		w.Header().Set("Content-Type", "application/octet-stream")
 		http.ServeContent(streamResponse{w}, r, "media", time.Time{}, io.NewSectionReader(streamReader{g, id}, 0, f.size))
 	})}
-	go func() { _ = g.server.Serve(l) }()
+	go func() { _ = g.server.Serve(mediaListener{Listener: l, ctx: ctx}) }()
 	go func() {
 		defer close(g.done)
 		for {
@@ -142,7 +146,46 @@ func (g *mediaStream) Close() {
 	g.mu.Lock()
 	g.cache = nil
 	g.lru.Init()
+	g.bytes = 0
 	g.mu.Unlock()
+}
+
+func (g *mediaStream) memoryConstrained() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lowMemory
+}
+
+func (g *mediaStream) reduceMemory() {
+	g.mu.Lock()
+	g.lowMemory = true
+	released := g.bytes
+	clear(g.cache)
+	g.lru.Init()
+	g.bytes = 0
+	g.mu.Unlock()
+	// Clearing references alone leaves heap pages committed until Go scavenges
+	// them. This exceptional path returns unused pages before starting FFmpeg.
+	debug.FreeOSMemory()
+	log.Printf("encoder memory recovery cache_released=%d cache_limit=%d", released, 32<<20)
+}
+
+func (g *mediaStream) releaseSession(v Session) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for p := range mediaArtifacts(v) {
+		id, ok := g.index[path.Join(v.Dir, p)]
+		if !ok {
+			continue
+		}
+		for key, entry := range g.cache {
+			if key.file == id {
+				g.bytes -= len(entry.Value.(streamBlockData).data)
+				g.lru.Remove(entry)
+				delete(g.cache, key)
+			}
+		}
+	}
 }
 func (g *mediaStream) Err() error       { g.mu.Lock(); defer g.mu.Unlock(); return g.err }
 func (g *mediaStream) ReadBytes() int64 { g.mu.Lock(); defer g.mu.Unlock(); return g.readBytes }
@@ -183,7 +226,11 @@ func (g *mediaStream) block(key streamKey) ([]byte, error) {
 		g.err = errors.Join(e, ce)
 		return nil, g.err
 	}
-	for g.bytes+len(data) > streamCacheBytes && g.lru.Len() > 0 {
+	limit := streamCacheBytes
+	if g.lowMemory {
+		limit = 32 << 20
+	}
+	for g.bytes+len(data) > limit && g.lru.Len() > 0 {
 		old := g.lru.Back()
 		b := old.Value.(streamBlockData)
 		g.bytes -= len(b.data)

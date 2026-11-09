@@ -20,7 +20,24 @@ type encoderProfile struct {
 }
 
 func softwareEncoder() encoderProfile {
-	return encoderProfile{name: "libx264", flags: []string{"-preset", "veryfast", "-crf", "18"}}
+	// Input -threads does not limit the encoder. Bound frame threads and
+	// lookahead explicitly, particularly for 3840x1080 stereo output.
+	return encoderProfile{name: "libx264", flags: []string{"-preset", "veryfast", "-crf", "18", "-threads:v", "2", "-rc-lookahead", "8"}}
+}
+
+func lowMemoryEncoder() encoderProfile {
+	// Avoid tune=zerolatency: its force-cfr setting can alter capture timing.
+	return encoderProfile{name: "libx264", flags: []string{"-preset", "veryfast", "-crf", "18", "-threads:v", "1", "-rc-lookahead", "0", "-bf", "0", "-x264-params", "sync-lookahead=0"}}
+}
+
+func allocationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "cannot allocate memory") ||
+		strings.Contains(s, "error allocating the output packet") ||
+		(strings.Contains(s, "x264 [error]: malloc of size ") && strings.Contains(s, " failed"))
 }
 func encoderCandidates(system string) []encoderProfile {
 	switch system {
