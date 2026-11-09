@@ -140,7 +140,7 @@ func TestCompleteRecordingCopyCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(out, v.ID+"-video")); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(out, recordingName(v, "video", 1))); !os.IsNotExist(err) {
 		t.Fatal("published incomplete data")
 	}
 	if _, err = os.Stat(filepath.Join(out, "."+v.ID+"-video.partial", "source")); !os.IsNotExist(err) {

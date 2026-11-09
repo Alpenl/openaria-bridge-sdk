@@ -251,6 +251,9 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		if !a.profile.upload && !a.gpuStack {
 			args = append(args, "-pix_fmt", "nv12")
 		}
+		if start, ok := recordingDate(sessionTime(v).StartedAt); ok {
+			args = append(args, "-metadata", "creation_time="+start.UTC().Format(time.RFC3339Nano))
+		}
 		// Local playback does not need faststart's final full-file relocation pass.
 		args = append(args, tmp)
 		log.Printf("stream encode session=%s encoder=%s hardware_decode=%v hardware_stack=%v timeline_repair=%v attempt=%d", v.ID, a.profile.name, a.decode, a.gpuStack, a.repair, i+1)

@@ -55,6 +55,9 @@ func TestCatalogWALReadOnlyAndVolumeBinding(t *testing.T) {
 	if items[0].Name != "SQLite 名称" || !strings.HasPrefix(items[0].MetadataSource, "sqlite:") || items[0].TakeSequence != 2 {
 		t.Fatalf("not hydrated %+v", items[0])
 	}
+	if items[0].Manifest.Time.Started != "" || items[0].Manifest.Time.Duration != 0 || items[0].MetadataWarning == "" {
+		t.Fatal("catalog replaced original recording time", items[0])
+	}
 	if items[1].Name != "other volume" {
 		t.Fatal("cross-volume contamination")
 	}

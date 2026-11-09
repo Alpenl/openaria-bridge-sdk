@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"time"
 )
 
 func mediaArtifacts(v Session) map[string]Artifact {
@@ -74,7 +75,7 @@ func finishVideo(ctx context.Context, st *os.Root, v Session, manifestSHA string
 	if v.Manifest.IMU.Artifact.Path != "" {
 		imu = "source/" + v.Manifest.IMU.Artifact.Path
 	}
-	b, e := json.MarshalIndent(map[string]any{"session_id": v.ID, "display_name": v.Name, "source_manifest_sha256": manifestSHA, "file": "video.mp4", "bytes": info.Size(), "media_hash_verified": false, "format": "H.264 SBS MP4", "source_copies_retained": true, "source_files": sourceFiles, "imu_file": imu, "audio_files": audio, "recording_data_note": "source 保留录制目录内全部文件及原始目录结构；IMU/音频不转换、不插值；空路径/列表表示清单未声明该数据，不制造缺失数据。逐文件核对字节数，未校验媒体 SHA256。", "timeline_repaired": repaired, "timing_note": "合成视频仅供观看，不能用于与原始 IMU 精确对齐；同步分析请使用 source 原始视频、音频、IMU、帧时间戳及 manifest。保留捕获时间间隔；仅在受限预检通过后修正重复/轻微倒退时间戳；非 SDK 同步认证"}, "", "  ")
+	b, e := json.MarshalIndent(map[string]any{"session_id": v.ID, "display_name": v.Name, "recording_time": sessionTime(v), "exported_at": time.Now().UTC().Format(time.RFC3339Nano), "directory_naming_version": 1, "source_manifest_sha256": manifestSHA, "file": "video.mp4", "bytes": info.Size(), "media_hash_verified": false, "format": "H.264 SBS MP4", "source_copies_retained": true, "source_files": sourceFiles, "imu_file": imu, "audio_files": audio, "recording_data_note": "source 保留录制目录内全部文件及原始目录结构；IMU/音频不转换、不插值；空路径/列表表示清单未声明该数据，不制造缺失数据。逐文件核对字节数，未校验媒体 SHA256。", "timeline_repaired": repaired, "timing_note": "合成视频仅供观看，不能用于与原始 IMU 精确对齐；同步分析请使用 source 原始视频、音频、IMU、帧时间戳及 manifest。保留捕获时间间隔；仅在受限预检通过后修正重复/轻微倒退时间戳；非 SDK 同步认证"}, "", "  ")
 	if e != nil {
 		return e
 	}

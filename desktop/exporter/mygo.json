@@ -2,7 +2,7 @@
   "name": "Open Aria Exporter",
   "slug": "open-aria-exporter",
   "identifier": "dev.alpen.openaria-exporter",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "out": "build/packages",
   "macos": {"signingIdentity": "-", "minimumSystemVersion": "12.0"},
   "linux": {"webview": false, "comment": "Read-only Open Aria recording export", "categories": ["Utility"], "command": "open-aria-exporter"}

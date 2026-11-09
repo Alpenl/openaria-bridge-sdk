@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"os"
 	"syscall"
 	"unsafe"
@@ -14,4 +15,16 @@ func lockFile(f *os.File) error {
 		return e
 	}
 	return nil
+}
+func lockBusy(err error) bool { return errors.Is(err, syscall.Errno(33)) }
+func hideControlDirectory(name string) error {
+	p, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return err
+	}
+	attr, err := syscall.GetFileAttributes(p)
+	if err != nil {
+		return err
+	}
+	return syscall.SetFileAttributes(p, attr|syscall.FILE_ATTRIBUTE_HIDDEN)
 }

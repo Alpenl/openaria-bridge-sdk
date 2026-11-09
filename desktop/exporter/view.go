@@ -263,13 +263,7 @@ func (a *app) recordingRow(c *ui.Context, v core.Session) {
 			if v.Error != "" || strings.Contains(v.Status, "partial") {
 				statusBadge(c, v)
 			}
-			when := v.Manifest.Time.Started
-			if when == "" {
-				when = "开始时间未知"
-			} else {
-				when = strings.Replace(strings.TrimSuffix(when, "Z"), "T", " ", 1)
-			}
-			ui.Textf(c, "%s · %s", when, mib(v.Bytes)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+			ui.Textf(c, "%s · %s", v.TimeLabel(), mib(v.Bytes)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Tooltip(v.TimeDetail())
 		})
 	})
 	if !bad && !a.busy && row.Clicked() {

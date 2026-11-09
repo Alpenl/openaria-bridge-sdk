@@ -44,8 +44,16 @@ func TestVideoOnlyOutputAndCleanup(t *testing.T) {
 	if len(info.Streams) < 2 {
 		t.Fatal("missing video/audio")
 	}
-	if _, e = Export(t.Context(), s, v, Options{Output: out, VideoOnly: true}); e == nil {
-		t.Fatal("overwrite accepted")
+	before, e := os.Stat(filepath.Join(p, "video.mp4"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if again, err := Export(t.Context(), s, v, Options{Output: out, VideoOnly: true}); err != nil || again != p {
+		t.Fatalf("existing output not reused: %s %v", again, err)
+	}
+	after, e := os.Stat(filepath.Join(p, "video.mp4"))
+	if e != nil || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("existing video was rewritten", e)
 	}
 }
 func TestVideoOnlyCancellationCleansAndRetries(t *testing.T) {
@@ -66,7 +74,7 @@ func TestVideoOnlyCancellationCleansAndRetries(t *testing.T) {
 			t.Fatalf("temp retained %s %v", n, e)
 		}
 	}
-	if _, e = os.Stat(filepath.Join(out, v.ID+"-video")); !os.IsNotExist(e) {
+	if _, e = os.Stat(filepath.Join(out, recordingName(v, "video", 1))); !os.IsNotExist(e) {
 		t.Fatal("cancel published")
 	}
 	if _, e = Export(t.Context(), s, v, Options{Output: out, VideoOnly: true}); e != nil {
