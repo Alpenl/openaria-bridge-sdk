@@ -328,7 +328,9 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 			}
 		}
 	}
-	if e = root.Mkdir(stage, 0700); e != nil && !os.IsExist(e) {
+	e = root.Mkdir(stage, 0700)
+	createdStage := e == nil
+	if e != nil && !os.IsExist(e) {
 		return "", e
 	}
 	info, e := root.Lstat(stage)
@@ -341,6 +343,16 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 	}
 	defer st.Close()
 	claim := receipt.ManifestSHA + "\n" + mode
+	defer func() {
+		if exportErr != nil && createdStage && (o.VideoOnly || o.rawOnly) {
+			// Later defers close the child handles and remove this attempt's media.
+			// Remove an empty shell only; never recursively delete unknown content
+			// or a staging directory inherited from an earlier attempt.
+			if err := removeEmptyStage(root, st, stage, claim); err != nil {
+				exportErr = errors.Join(exportErr, err)
+			}
+		}
+	}()
 	if e = targetSafe(st, ".claim"); e != nil {
 		return "", e
 	}

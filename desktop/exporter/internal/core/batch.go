@@ -73,6 +73,7 @@ func ExportBatch(ctx context.Context, s source.Source, vs []Session, o Options, 
 					g.prefetchSession(vs[i+1])
 				}
 				dst, e := Export(ctx, s, vs[i], opts)
+				g.releaseSession(vs[i])
 				mu.Lock()
 				if e != nil {
 					first = errors.Join(first, e)

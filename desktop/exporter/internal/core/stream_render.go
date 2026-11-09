@@ -85,6 +85,10 @@ func mediaBitrate(v Session) int64 {
 	return max(8_000_000, int64(float64(n)*8/d*1.25))
 }
 func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream, progress func(Progress), timing *sessionTimings) error {
+	return renderStreamingWithRunner(ctx, dir, v, g, progress, timing, runMedia)
+}
+
+func renderStreamingWithRunner(ctx context.Context, dir string, v Session, g *mediaStream, progress func(Progress), timing *sessionTimings, run func(context.Context, string, []string, func(Progress)) error) error {
 	ff, e := mediaTool("ffmpeg")
 	if e != nil {
 		return e
@@ -155,10 +159,11 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 	decodeHardware := profile.useHardwareDecode(codec, width, height)
 	// Retry unavailable hardware without exposing device-specific UI options.
 	type attempt struct {
-		profile  encoderProfile
-		decode   bool
-		gpuStack bool
-		repair   bool
+		profile   encoderProfile
+		decode    bool
+		gpuStack  bool
+		repair    bool
+		lowMemory bool
 	}
 	var attempts []attempt
 	if decodeHardware && profile.stack != "" && !g.stackFailed(stackFailureKey(profile, codec, width, height)) {
@@ -171,19 +176,36 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 	if profile.name != "libx264" {
 		attempts = append(attempts, attempt{profile: softwareEncoder()})
 	}
-	attempts = append(attempts, attempt{profile: softwareEncoder(), repair: true})
+	attempts = append(attempts,
+		attempt{profile: lowMemoryEncoder(), lowMemory: true},
+		attempt{profile: softwareEncoder(), repair: true},
+		attempt{profile: lowMemoryEncoder(), repair: true, lowMemory: true})
 	tmp := filepath.Join(work, "playback.mp4")
 	needsRepair := false
 	var audited [2]timelineAudit
 	repaired := false
+	auditDone := false
+	recoveryHeld := false
 	for i, a := range attempts {
+		if g.memoryConstrained() != a.lowMemory {
+			continue
+		}
 		if needsRepair && !a.repair {
 			continue
 		}
 		if a.repair && !needsRepair {
 			break
 		}
-		if a.repair {
+		if a.lowMemory && !recoveryHeld {
+			select {
+			case g.recoverySlot <- struct{}{}:
+				recoveryHeld = true
+				defer func() { <-g.recoverySlot }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if a.repair && !auditDone {
 			for eye := 0; eye < 2; eye++ {
 				audit, err := auditTimeline(ctx, inputs[eye])
 				if err != nil {
@@ -198,6 +220,7 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 			if math.Abs((audited[0].adjusted-audited[0].first)-(audited[1].adjusted-audited[1].first)) > .15 {
 				return fmt.Errorf("左右眼时长差超过 150ms，拒绝静默截断")
 			}
+			auditDone = true
 		}
 		if e = ctx.Err(); e != nil {
 			return e
@@ -229,13 +252,17 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 				filter += fmt.Sprintf(";[2:a]atrim=start=%.9f,asetpts=PTS-STARTPTS,apad[a]", -offset)
 			}
 		}
-		args := []string{"-nostdin", "-v", "error", "-xerror", "-y", "-progress", "pipe:1", "-filter_complex_threads", "2"}
+		threads := "2"
+		if a.lowMemory {
+			threads = "1"
+		}
+		args := []string{"-nostdin", "-v", "error", "-xerror", "-y", "-progress", "pipe:1", "-filter_complex_threads", threads}
 		args = append(args, a.profile.global...)
 		for n, p := range inputs {
 			if a.decode && n < 2 {
 				args = append(args, a.profile.decoderArgs(a.gpuStack)...)
 			}
-			args = append(args, "-threads", "2", "-protocol_whitelist", "file,http,tcp", "-f", "concat", "-safe", "0", "-i", p)
+			args = append(args, "-threads", threads, "-protocol_whitelist", "file,http,tcp", "-f", "concat", "-safe", "0", "-i", p)
 		}
 		// Framesync can emit closely spaced frames from the two capture clocks.
 		// Keep the filter time base: the default 1/framerate encoder time base
@@ -256,12 +283,16 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 		}
 		// Local playback does not need faststart's final full-file relocation pass.
 		args = append(args, tmp)
-		log.Printf("stream encode session=%s encoder=%s hardware_decode=%v hardware_stack=%v timeline_repair=%v attempt=%d", v.ID, a.profile.name, a.decode, a.gpuStack, a.repair, i+1)
+		log.Printf("stream encode session=%s encoder=%s hardware_decode=%v hardware_stack=%v timeline_repair=%v low_memory=%v attempt=%d", v.ID, a.profile.name, a.decode, a.gpuStack, a.repair, a.lowMemory, i+1)
 		if progress != nil {
-			progress(Progress{Stage: "边读边编码", File: "准备媒体"})
+			stage := "边读边编码"
+			if a.lowMemory {
+				stage = "内存不足，使用低内存编码"
+			}
+			progress(Progress{Stage: stage, File: "准备媒体"})
 		}
 		start = time.Now()
-		e = runMedia(ctx, ff, args, progress)
+		e = run(ctx, ff, args, progress)
 		timing.encode += time.Since(start)
 		if e == nil {
 			repaired = a.repair
@@ -278,6 +309,9 @@ func renderStreaming(ctx context.Context, dir string, v Session, g *mediaStream,
 			g.recordStackFailure(stackFailureKey(a.profile, codec, width, height), e)
 		}
 		needsRepair = needsRepair || timestampFailure(e)
+		if allocationFailure(e) && !a.lowMemory {
+			g.reduceMemory()
+		}
 	}
 	if e != nil {
 		return e

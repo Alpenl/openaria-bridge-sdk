@@ -46,6 +46,9 @@ func TestRawFallbackPreservesBytesAndWarns(t *testing.T) {
 			t.Fatalf("false product %s: %v", name, e)
 		}
 	}
+	if _, e := os.Stat(filepath.Join(out, "."+v.ID+"-video.partial")); !os.IsNotExist(e) {
+		t.Fatalf("failed attempt left a staging shell: %v", e)
+	}
 	// A repeated attempt must never overwrite a saved raw export.
 	if _, err = Export(t.Context(), s, v, Options{Output: out, VideoOnly: true, RawFallback: true}); errors.As(err, &warning) || err == nil {
 		t.Fatalf("overwrote raw output: %v", err)

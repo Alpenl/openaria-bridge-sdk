@@ -257,7 +257,17 @@ func (a *app) recordingRow(c *ui.Context, v core.Session) {
 			}
 		})
 		ui.Column(c).AlignItems(ui.End).Gap(5).Children(func() {
-			if v.LocalExportedAt != "" {
+			if result := a.exportResults[v.Dir]; result != "" {
+				color := t.Warning
+				if result == "本次已导出" {
+					color = t.Success
+				}
+				detail := result
+				if v.LocalExportedAt != "" {
+					detail += "\n历史成功记录：" + v.LocalExportedAt + "\n" + v.LocalExportPath
+				}
+				ui.Badge(c, result).FontSize(11).Background(color.Alpha(0.14)).TextColor(color).Tooltip(detail)
+			} else if v.LocalExportedAt != "" {
 				ui.Badge(c, "本机已导出").FontSize(11).Background(t.Success.Alpha(0.14)).TextColor(t.Success).Tooltip(v.LocalExportedAt + "\n" + v.LocalExportPath)
 			}
 			if v.Error != "" || strings.Contains(v.Status, "partial") {
