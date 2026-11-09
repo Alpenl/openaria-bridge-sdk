@@ -39,6 +39,8 @@ type Manifest struct {
 	Name     string `json:"display_name"`
 	Time     struct {
 		Started  string  `json:"started_at"`
+		Ended    string  `json:"ended_at"`
+		Timezone string  `json:"timezone"`
 		Duration float64 `json:"duration_seconds"`
 	} `json:"time"`
 	Video struct {
@@ -62,8 +64,9 @@ type Session struct {
 	MetadataWarning       string
 	TakeID                string
 	TakeSequence          int
-	LocalExportedAt       string `json:"local_exported_at,omitempty"`
-	LocalExportPath       string `json:"local_export_path,omitempty"`
+	RecordingTime         RecordingTime `json:"recording_time"`
+	LocalExportedAt       string        `json:"local_exported_at,omitempty"`
+	LocalExportPath       string        `json:"local_export_path,omitempty"`
 }
 
 func Scan(ctx context.Context, s source.Source) ([]Session, error) {
@@ -116,6 +119,7 @@ func Scan(ctx context.Context, s source.Source) ([]Session, error) {
 				for _, f := range files {
 					v.Bytes += f.Bytes
 				}
+				loadRecordingTime(ctx, s, &v)
 				out = append(out, v)
 				return nil
 			}
@@ -132,6 +136,9 @@ func Scan(ctx context.Context, s source.Source) ([]Session, error) {
 	e := walk(".", 0)
 	if e == nil {
 		e = enrichCatalog(ctx, s, out)
+	}
+	if e == nil {
+		sortRecordings(out)
 	}
 	return out, e
 }
@@ -216,24 +223,23 @@ type Options struct {
 	Progress           func(Progress)
 }
 type Receipt struct {
-	Session      string
-	ManifestSHA  string
-	Mode         string
-	Integrity    string
-	Completeness string
-	Timing       string
-	Files        map[string]string
-	Provenance   map[string]string
+	Session       string
+	ManifestSHA   string
+	Mode          string
+	Integrity     string
+	Completeness  string
+	Timing        string
+	Files         map[string]string
+	Provenance    map[string]string
+	RecordingTime RecordingTime `json:"recording_time"`
 }
 
 func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (result string, exportErr error) {
 	if o.VideoOnly {
 		o.Playback = true
-		for _, tool := range []string{"ffmpeg", "ffprobe"} {
-			if _, err := mediaTool(tool); err != nil {
-				return "", &processingError{err}
-			}
-		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	timings := newSessionTimings(v.ID, o.Serial)
 	defer timings.log()
@@ -254,7 +260,7 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 		mode = "raw"
 	}
 	key := sha256.Sum256(v.Raw)
-	receipt := Receipt{v.ID, hex.EncodeToString(key[:]), mode, "逐文件 SHA256 已验证", "未执行完整 schema/录制完整性认证", "未验证同步", map[string]string{}, map[string]string{}}
+	receipt := Receipt{v.ID, hex.EncodeToString(key[:]), mode, "逐文件 SHA256 已验证", "未执行完整 schema/录制完整性认证", "未验证同步", map[string]string{}, map[string]string{}, sessionTime(v)}
 	if strings.Contains(v.Status, "partial") {
 		receipt.Completeness = "partial / 未封存"
 	}
@@ -268,24 +274,59 @@ func exportOnce(ctx context.Context, s source.Source, v Session, o Options) (res
 	defer root.Close()
 	name := v.ID + "-" + mode
 	stage := "." + name + ".partial"
-	// Keep a stable lock outside the directory being renamed. Windows refuses
-	// to rename a directory containing an open file, even with delete sharing.
-	// Leave this lock file in place: unlinking it would let waiters lock different
-	// file objects for the same export. The OS releases the lock on close/crash.
-	publishLockName := "." + name + ".lock"
-	if e = targetSafe(root, publishLockName); e != nil {
-		return "", e
+	if source.Safe(name) != nil || strings.Contains(v.ID, "/") {
+		return "", fmt.Errorf("无效录像标识")
 	}
-	publishLock, e := root.OpenFile(publishLockName, os.O_CREATE|os.O_RDWR, 0600)
-	if e != nil {
-		return "", e
+	var publishLock *os.File
+	if o.VideoOnly || o.rawOnly {
+		// Session identity and human-readable name are separate reservations.
+		identityLock, err := managedLock(root, "session/"+v.Manifest.VolumeID+"/"+v.ID+"/"+mode)
+		if err != nil {
+			return "", fmt.Errorf("此录像正在被其他导出任务使用：%w", err)
+		}
+		defer identityLock.Close()
+		var existing bool
+		name, publishLock, existing, e = reserveRecordingName(ctx, root, v, mode)
+		if e != nil {
+			return "", e
+		}
+		defer publishLock.Close()
+		if existing {
+			dst := filepath.Join(o.Output, name)
+			if o.rawOnly {
+				return "", fmt.Errorf("原始文件已保存，保留不覆盖：%s", dst)
+			}
+			if e = validateExistingOutput(root, name, v); e != nil {
+				return "", fmt.Errorf("已有导出不完整或已变化，保留不覆盖：%w", e)
+			}
+			if o.Progress != nil {
+				o.Progress(Progress{Stage: "已有完整导出，跳过重复复制", File: dst, Bytes: ExportBytes(v)})
+			}
+			return dst, nil
+		}
+	} else {
+		publishLockName := "." + name + ".lock"
+		if e = targetSafe(root, publishLockName); e != nil {
+			return "", e
+		}
+		publishLock, e = root.OpenFile(publishLockName, os.O_CREATE|os.O_RDWR, 0600)
+		if e != nil {
+			return "", e
+		}
+		defer publishLock.Close()
+		if e = lockFile(publishLock); e != nil {
+			return "", fmt.Errorf("另一个导出任务正在使用此目录: %w", e)
+		}
+		if _, e = root.Lstat(name); !os.IsNotExist(e) {
+			return "", fmt.Errorf("目标冲突（不覆盖）: %s", name)
+		}
 	}
-	defer publishLock.Close()
-	if e = lockFile(publishLock); e != nil {
-		return "", fmt.Errorf("另一个导出任务正在使用此目录: %w", e)
-	}
-	if _, e = root.Lstat(name); !os.IsNotExist(e) {
-		return "", fmt.Errorf("目标冲突（不覆盖）: %s", name)
+	if o.VideoOnly {
+		for _, tool := range []string{"ffmpeg", "ffprobe"} {
+			if _, err := mediaTool(tool); err != nil {
+				return "", &processingError{err}
+			}
+		}
 	}
 	if e = root.Mkdir(stage, 0700); e != nil && !os.IsExist(e) {
 		return "", e

@@ -18,7 +18,7 @@ func TestRawFallbackPreservesBytesAndWarns(t *testing.T) {
 	out := t.TempDir()
 	dst, err := Export(t.Context(), s, v, Options{Output: out, VideoOnly: true, RawFallback: true})
 	var warning *RawFallbackError
-	if !errors.As(err, &warning) || dst != warning.Path || !strings.HasSuffix(dst, "-raw") {
+	if !errors.As(err, &warning) || dst != warning.Path || !strings.HasSuffix(dst, "（未合成）") {
 		t.Fatalf("not an explicit raw-only result: %q %v", dst, err)
 	}
 	for _, a := range v.Artifacts {
@@ -82,7 +82,7 @@ func TestRawFallbackCancellationDoesNotPublish(t *testing.T) {
 		if err == nil || errors.As(err, &warning) {
 			t.Fatalf("cancel reported saved raw: %v", err)
 		}
-		if _, e := os.Stat(filepath.Join(out, v.ID+"-raw")); !os.IsNotExist(e) {
+		if _, e := os.Stat(filepath.Join(out, recordingName(v, "raw", 1))); !os.IsNotExist(e) {
 			t.Fatal("published canceled raw", e)
 		}
 		if _, e := os.Stat(filepath.Join(out, "."+v.ID+"-raw.partial", "source")); !os.IsNotExist(e) {
@@ -94,14 +94,21 @@ func TestRawFallbackDoesNotRunOnOutputConflict(t *testing.T) {
 	requireMediaTools(t)
 	s, v := fixture(t, false)
 	out := t.TempDir()
-	if e := os.Mkdir(filepath.Join(out, v.ID+"-video"), 0700); e != nil {
-		t.Fatal(e)
+	root, err := os.OpenRoot(out)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := Export(t.Context(), s, v, Options{Output: out, VideoOnly: true, RawFallback: true})
+	defer root.Close()
+	lock, err := managedLock(root, "session/"+v.Manifest.VolumeID+"/"+v.ID+"/video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	_, err = Export(t.Context(), s, v, Options{Output: out, VideoOnly: true, RawFallback: true})
 	if err == nil {
 		t.Fatal("expected conflict")
 	}
-	if _, e := os.Stat(filepath.Join(out, v.ID+"-raw")); !os.IsNotExist(e) {
+	if _, e := os.Stat(filepath.Join(out, recordingName(v, "raw", 1))); !os.IsNotExist(e) {
 		t.Fatal("unexpected fallback", e)
 	}
 }

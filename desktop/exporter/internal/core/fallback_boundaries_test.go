@@ -53,7 +53,7 @@ func TestDisconnectedSourceDoesNotPublishRaw(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "disconnected") {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(out, v.ID+"-raw")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(out, recordingName(v, "raw", 1))); !os.IsNotExist(err) {
 		t.Fatal("published disconnected raw", err)
 	}
 }

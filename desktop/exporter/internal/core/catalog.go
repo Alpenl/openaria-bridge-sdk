@@ -181,10 +181,10 @@ func applyCatalog(ctx context.Context, db *sql.DB, items []Session, label string
 			continue
 		}
 		v.Name = summary.Name
-		if summary.Started != "" {
-			v.Manifest.Time.Started = summary.Started
+		if summary.Started != "" && summary.Started != v.Manifest.Time.Started {
+			v.MetadataWarning = "catalog 时间与 manifest 不一致，使用录制原始时间"
 		}
-		v.Manifest.Time.Duration = summary.Duration
+		// The sealed manifest, not a cached display summary, owns recording time.
 		v.TakeID = summary.TakeID
 		v.TakeSequence = summary.TakeSequence
 		v.MetadataSource = "sqlite:" + label

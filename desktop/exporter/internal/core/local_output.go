@@ -257,17 +257,27 @@ func DeleteLocalOutput(out LocalOutput) error {
 	}
 	defer parent.Close()
 	name := filepath.Base(out.Path)
-	lockName := "." + name + ".lock"
-	if err = targetSafe(parent, lockName); err != nil {
-		return err
-	}
-	lock, err := parent.OpenFile(lockName, os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := managedLock(parent, "output/"+name)
 	if err != nil {
-		return err
+		return fmt.Errorf("此成品正在被其他任务使用：%w", err)
 	}
 	defer lock.Close()
-	if err = lockFile(lock); err != nil {
-		return fmt.Errorf("此成品正在被其他任务使用：%w", err)
+	// Existing UUID exports remain compatible with pre-0.1.10 applications.
+	lockName := "." + name + ".lock"
+	if _, e := parent.Lstat(lockName); e == nil {
+		if err = targetSafe(parent, lockName); err != nil {
+			return err
+		}
+		legacyLock, e := parent.OpenFile(lockName, os.O_RDWR, 0600)
+		if e != nil {
+			return e
+		}
+		defer legacyLock.Close()
+		if e = lockFile(legacyLock); e != nil {
+			return fmt.Errorf("此成品正在被其他任务使用：%w", e)
+		}
+	} else if !os.IsNotExist(e) {
+		return e
 	}
 	if err = CheckLocalOutput(out); err != nil {
 		return err

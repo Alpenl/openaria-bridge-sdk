@@ -41,7 +41,7 @@ func TestRecordingCopyFailuresDoNotPublish(t *testing.T) {
 			if err == nil || errors.As(err, &warning) {
 				t.Fatal("incomplete data reported saved", err)
 			}
-			if _, err = os.Stat(filepath.Join(out, v.ID+"-video")); !os.IsNotExist(err) {
+			if _, err = os.Stat(filepath.Join(out, recordingName(v, "video", 1))); !os.IsNotExist(err) {
 				t.Fatal("published incomplete data")
 			}
 		})
