@@ -20,7 +20,7 @@ Linux `mke2fs` 来自 e2fsprogs，嵌套 ext4/大于 4GiB 稀疏文件测试应�
 
 ## 完整包
 
-`prepare_media.py` 对 Windows/Linux 使用 `media-lock.json` 中的固定上游 URL 和 SHA256。下载只提取两个工具和许可证，不展开任意路径、不执行下载脚本。更新依赖时先检查上游版本及许可，再修改 URL/digest，重新跑三平台测试。macOS 使用 Homebrew bottle，将整个非系统动态库闭包复制、重定位并签名，保留版本及源配方；Homebrew 版本随 runner 更新，确切版本记录在包内 `Homebrew-SOURCES.json`，不是可复现的逐字节构建。
+`prepare_media.py` 对 Windows/Linux 使用 `media-lock.json` 中的固定上游 URL 和 SHA256。下载只提取两个工具和许可证，不展开任意路径、不执行下载脚本。选择月末长期保留归档（日构建仅保留十四天）。更新依赖时先检查上游版本及许可，再修改 URL/digest，重新跑三平台测试。macOS 使用 Homebrew bottle，将整个非系统动态库闭包复制、重定位并签名，保留版本及源配方；Homebrew 版本随 runner 更新，确切版本记录在包内 `Homebrew-SOURCES.json`，不是可复现的逐字节构建。
 
 打包脚本从隔离源码副本构建，要求版本对应的安装器存在且非空。Mac 使用 PKG 安装应用和只读 helper（CI 不生成 DMG）。Windows 使用 NSIS，Ubuntu 生成 deb 和用户安装 tar.gz。
 
