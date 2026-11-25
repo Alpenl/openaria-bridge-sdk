@@ -70,6 +70,15 @@ type Session struct {
 }
 
 func Scan(ctx context.Context, s source.Source) ([]Session, error) {
+	return scan(ctx, s, true)
+}
+
+// ScanFolder imports self-contained recordings without consulting device databases.
+func ScanFolder(ctx context.Context, s source.Source) ([]Session, error) {
+	return scan(ctx, s, false)
+}
+
+func scan(ctx context.Context, s source.Source, catalog bool) ([]Session, error) {
 	var out []Session
 	var walk func(string, int) error
 	walk = func(p string, depth int) error {
@@ -124,8 +133,21 @@ func Scan(ctx context.Context, s source.Source) ([]Session, error) {
 				return nil
 			}
 		}
+		// A selected card/copy root may also contain OS metadata directories.
+		// Once recording roots are present, don't descend into unrelated trees.
+		hasRecordingRoot := false
+		if !catalog {
+			for _, d := range ds {
+				if d.Dir && (d.Name == "recordings" || d.Name == "sessions") {
+					hasRecordingRoot = true
+				}
+			}
+		}
 		for _, d := range ds {
 			if d.Dir {
+				if !catalog && (strings.HasPrefix(d.Name, ".") || d.Name == "System Volume Information" || d.Name == "$RECYCLE.BIN" || d.Name == "lost+found" || hasRecordingRoot && d.Name != "recordings" && d.Name != "sessions") {
+					continue
+				}
 				if e := walk(path.Join(p, d.Name), depth+1); e != nil {
 					return e
 				}
@@ -134,7 +156,7 @@ func Scan(ctx context.Context, s source.Source) ([]Session, error) {
 		return nil
 	}
 	e := walk(".", 0)
-	if e == nil {
+	if e == nil && catalog {
 		e = enrichCatalog(ctx, s, out)
 	}
 	if e == nil {

@@ -97,11 +97,17 @@ func (a *app) sidebar(c *ui.Context) {
 					options = []string{"请插入 OpenAria 内存卡"}
 					selected = options[0]
 				}
-				if a.cardChoice == "" {
+				if a.cardChoice == "" && !a.folderSource {
 					a.cardChoice = selected
 				}
+				if a.folderSource {
+					options = append([]string{"使用录像文件夹"}, options...)
+					if a.cardChoice == "" {
+						a.cardChoice = "使用录像文件夹"
+					}
+				}
 				ui.Select(c.Key("card-selector"), &a.cardChoice, options).Label("内存卡").Disabled(a.busy || a.refreshing || len(a.cards) == 0).FontSize(12)
-				if a.cardChoice != selected {
+				if a.cardChoice != selected && a.cardChoice != "使用录像文件夹" {
 					for _, card := range a.cards {
 						if card.Label == a.cardChoice {
 							a.selectCard(card)
@@ -110,6 +116,10 @@ func (a *app) sidebar(c *ui.Context) {
 					}
 				}
 				ui.Text(c, a.cardMessage).FontSize(11).TextColor(t.TextMuted)
+				ui.Button(c, "选择录像文件夹").Disabled(a.busy || a.refreshing).OnClick(a.chooseSourceFolder)
+				if a.folderSource {
+					ui.Text(c, a.src).FontSize(11).TextColor(t.TextMuted)
+				}
 				ui.Button(c, "重新扫描录像").Disabled(a.busy || a.refreshing || a.src == "").OnClick(func() { a.run(false) })
 			})
 
