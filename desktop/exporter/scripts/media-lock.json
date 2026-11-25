@@ -1,12 +1,12 @@
 {
-  "release": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-04-12-51",
-  "source": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-11-04-12-51",
+  "release": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/tag/autobuild-2026-11-24-12-41",
+  "source": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/tree/autobuild-2026-11-24-12-41",
   "linux-amd64": {
-    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-04-12-51/ffmpeg-n8.1.3-34-ga35157abb9-linux64-gpl-8.1.tar.xz",
-    "sha256": "0fc51331600b02730e6d63485ac7e3cd203bdeeb13216cd78c8844aeb9277fb8"
+    "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-24-12-41/ffmpeg-n8.1.3-41-ga8029b6528-linux64-gpl-8.1.tar.xz",
+    "sha256": "b4234c329574dd1d821ab79999f9e5e727045bf24d11847e1e14deba27cea5a8"
   },
   "windows-amd64": {
-    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-04-12-51/ffmpeg-n8.1.3-34-ga35157abb9-win64-gpl-8.1.zip",
-    "sha256": "a0c6b648d42427b348ab2c5ad50381463dde8e756a3723371c9b78ecb852d763"
+    "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-24-12-41/ffmpeg-n8.1.3-41-ga8029b6528-win64-gpl-8.1.zip",
+    "sha256": "a6bd440aa135a628da65dc4338e86761420ddb7b5f5839d08f31a79c9dc405d7"
   }
 }
