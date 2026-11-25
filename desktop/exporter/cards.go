@@ -138,6 +138,9 @@ func scanCard(ctx context.Context, s source.Source) ([]core.Session, error) {
 func (a *app) applyCards(r cardDiscovery) bool {
 	a.cards = r.Cards
 	a.cardMessage = r.Message
+	if a.folderSource {
+		return false
+	}
 	if r.Err != nil {
 		log.Printf("card detection: %v", r.Err)
 	}
@@ -165,6 +168,7 @@ func (a *app) selectCard(c Card) {
 	if a.src == c.Path && a.cardID == c.VolumeID {
 		return
 	}
+	a.folderSource = false
 	a.changeSource(c.Path)
 	a.cardID = c.VolumeID
 	a.cardChoice = c.Label

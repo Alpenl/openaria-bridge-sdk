@@ -20,6 +20,7 @@ import (
 type app struct {
 	src, out, query, status         string
 	busy                            bool
+	folderSource                    bool
 	items                           []core.Session
 	picked                          map[string]bool
 	list                            ui.ListState
@@ -84,6 +85,7 @@ func (a *app) run(export bool) {
 		a.status = "准备导出…"
 	}
 	src, cardID, out := a.src, a.cardID, outputDirectory(a.out)
+	folder := a.folderSource
 	var selected []core.Session
 	for _, v := range a.items {
 		if a.picked[v.Dir] {
@@ -104,7 +106,7 @@ func (a *app) run(export bool) {
 		s := held
 		var e error
 		if !export {
-			s, e = openSelectedCard(ctx, src, cardID)
+			s, e = openRecordingSource(ctx, src, cardID, folder)
 		}
 		var items []core.Session
 		msg := ""
@@ -114,7 +116,7 @@ func (a *app) run(export bool) {
 		if e == nil {
 
 			if !export {
-				items, e = scanCard(ctx, s)
+				items, e = scanRecordingSource(ctx, s, folder)
 				msg = fmt.Sprintf("发现 %d 条录像。导出将生成 MP4 并保留全部原始视频、IMU、音频等录制数据。", len(items)) + source.Warnings(s)
 				if e == nil {
 					historyErr = loadLocalMarks(items)
@@ -194,7 +196,7 @@ func (a *app) run(export bool) {
 }
 func cli() error {
 	f := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
-	src := f.String("source", "", "外置 OpenAria 内存卡分区；省略时选择第一张")
+	src := f.String("source", "", "录像文件夹或外置 OpenAria 内存卡分区；省略时选择第一张")
 	out := f.String("output", "", "输出目录")
 	id := f.String("id", "", "session_id，逗号分隔；all 为全部有效条目")
 	_ = f.Bool("playback", true, "兼容旧命令；现在默认导出合成视频")
@@ -212,12 +214,13 @@ func cli() error {
 		}
 		*src = r.Cards[0].Path
 	}
-	s, e := openSelectedCard(ctx, *src, "")
+	folder := isSourceFolder(*src)
+	s, e := openRecordingSource(ctx, *src, "", folder)
 	if e != nil {
 		return e
 	}
 	defer s.Close()
-	vs, e := scanCard(ctx, s)
+	vs, e := scanRecordingSource(ctx, s, folder)
 	if e != nil {
 		return e
 	}
